@@ -70,6 +70,12 @@ function positiveInteger(value, fallback = null) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function isUniqueViolation(error) {
+  return error?.code === 'ER_DUP_ENTRY'
+    || error?.code === 'SQLITE_CONSTRAINT_UNIQUE'
+    || String(error?.message || '').toUpperCase().includes('UNIQUE');
+}
+
 function publicUser(row) {
   return {
     user_id: row.user_id,
@@ -267,7 +273,7 @@ function registerRoutes(router, db, config) {
         user: publicUser(user),
       });
     } catch (error) {
-      if (String(error.message).includes('UNIQUE')) {
+      if (isUniqueViolation(error)) {
         throw new HttpError(409, 'Email đã được sử dụng.');
       }
       throw error;
@@ -763,7 +769,7 @@ function registerRoutes(router, db, config) {
       audit(db, ctx, 'REQUEST_REFUND', 'refund', Number(result.lastInsertRowid));
       json(ctx.res, 201, { success: true });
     } catch (error) {
-      if (String(error.message).includes('UNIQUE')) {
+      if (isUniqueViolation(error)) {
         throw new HttpError(409, 'Đơn này đã có yêu cầu hoàn tiền.');
       }
       throw error;
@@ -795,7 +801,7 @@ function registerRoutes(router, db, config) {
       audit(db, ctx, 'CREATE_REVIEW', 'review', Number(result.lastInsertRowid));
       json(ctx.res, 201, { message: 'Đánh giá đã được gửi và đang chờ duyệt.' });
     } catch (error) {
-      if (String(error.message).includes('UNIQUE')) {
+      if (isUniqueViolation(error)) {
         throw new HttpError(409, 'Bạn đã đánh giá sản phẩm này.');
       }
       throw error;
@@ -1074,7 +1080,7 @@ function registerAdminRoutes(router, db, roles) {
       audit(db, ctx, 'CREATE_PRODUCT', 'product', id);
       json(ctx.res, 201, { item: db.prepare(`${productSelect()} WHERE p.product_id = ?`).get(id) });
     } catch (error) {
-      if (String(error.message).includes('UNIQUE')) {
+      if (isUniqueViolation(error)) {
         throw new HttpError(409, 'Slug sản phẩm đã tồn tại.');
       }
       throw error;
@@ -1651,3 +1657,4 @@ if (require.main === module) {
 }
 
 module.exports = { createApplication, startServer };
+

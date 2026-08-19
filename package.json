@@ -1,6 +1,6 @@
 {
   "name": "flowery-shop",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "private": true,
   "description": "Hệ thống bán hoa trực tuyến Hybrid: Web, Backend API và Windows App",
   "scripts": {
@@ -8,11 +8,16 @@
     "server": "node server/server.js",
     "build": "npm --prefix client run build",
     "start": "node server/server.js",
+    "db:migrate": "node scripts/migrate-sqlite-to-mysql.js",
     "test": "node --test server/tests/*.test.js",
     "lint": "npm --prefix client run lint",
     "check": "npm run lint && npm run test && npm run build"
   },
   "engines": {
     "node": ">=24"
+  },
+  "dependencies": {
+    "mysql2": "^3.23.3"
   }
 }
+

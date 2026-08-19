@@ -1,4 +1,5 @@
 node_modules/
+.npm-cache/
 client/node_modules/
 client/dist/
 server/data/*.db
@@ -8,3 +9,4 @@ server/data/app.secret
 .env
 *.log
 .DS_Store
+

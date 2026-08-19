@@ -5,7 +5,7 @@
 | Tài khoản và hồ sơ | `users`, scrypt, session HMAC, `/auth/*`, `/me`, RBAC và khóa tài khoản |
 | Catalog và tìm kiếm | `categories`, `products`, truy vấn có tham số, bộ lọc, phân trang, gợi ý liên quan |
 | Giỏ và wishlist | `cart_items`, `wishlists`, API đồng bộ và fallback localStorage cho khách |
-| Đơn và thanh toán | transaction SQLite, tính giá lại, idempotency, payment adapter COD/sandbox |
+| Đơn và thanh toán | transaction MySQL/InnoDB, tính giá lại, idempotency, payment adapter COD/sandbox |
 | Kho và giao hàng | chuỗi trạng thái bắt buộc, phân quyền kho, mã vận đơn duy nhất, `order_status_history`, `shipment_attempts`, webhook giao thành công/thất bại |
 | Đánh giá và nội dung | xác minh đã mua, trạng thái Pending/Approved/Rejected, `articles` |
 | Hoàn tiền | khách gửi lý do/bằng chứng, CSKH Approved/Rejected, cổng thanh toán mới được Complete, lưu mã đối soát |
@@ -19,5 +19,6 @@
 - Flowery Payment Sandbox → cổng thẻ/ví chính thức và webhook ký số.
 - Flowery Express → API nhà vận chuyển và webhook trạng thái.
 - SVG nội bộ → object storage/CDN, upload có kiểm soát và URL ký số.
-- SQLite đơn nút → PostgreSQL/SQL Server managed nếu cần nhân bản ngang nhiều node.
+- MySQL cục bộ → MySQL managed/cluster nếu cần HA, sao lưu tự động và nhân bản ngang.
 - Audit/console log → nền tảng log, metrics, tracing và cảnh báo tập trung.
+

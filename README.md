@@ -2,9 +2,19 @@
 
 Flowery là một Hybrid System có thể chạy độc lập, được xây dựng từ tài liệu mô tả
 nghiệp vụ và sơ đồ kiến trúc phân lớp. Hệ thống gồm cửa hàng React, cổng quản trị,
-API Node.js, cơ sở dữ liệu SQLite tự khởi tạo và Windows App Java cho nhân viên.
+API Node.js, cơ sở dữ liệu MySQL 8.4 LTS và Windows App Java cho nhân viên.
 
 Sơ đồ kiến trúc tham chiếu được lưu tại `docs/architecture.png`.
+
+## Cập nhật 1.5.0
+
+- Chuyển cơ sở dữ liệu vận hành mặc định từ SQLite sang MySQL Community Server
+  8.4 LTS, sử dụng InnoDB, khóa ngoại và bộ ký tự `utf8mb4`.
+- Tự tạo đầy đủ schema khi backend khởi động và bổ sung lệnh
+  `npm run db:migrate` để chuyển dữ liệu SQLite cũ sang MySQL.
+- Giữ SQLite `:memory:` riêng cho kiểm thử nhanh; Web và Windows App vẫn chỉ giao
+  tiếp với Backend API, không truy cập database trực tiếp.
+- Bổ sung Docker Compose gồm cả MySQL, health check và volume dữ liệu riêng.
 
 ## Cập nhật 1.4.0
 
@@ -69,12 +79,14 @@ Khởi động backend tại `http://127.0.0.1:5000`, sau đó xem hướng dẫ
 
 ## Yêu cầu
 
-- Node.js 24 trở lên (dự án dùng mô-đun `node:sqlite` tích hợp).
+- Node.js 24 trở lên.
 - npm 10 trở lên.
+- MySQL Community Server 8.4 LTS (hoặc chạy đồng thời bằng Docker Compose).
 
 ## Chạy nhanh
 
 ```powershell
+npm ci
 cd client
 npm ci
 cd ..
@@ -122,11 +134,25 @@ triển khai:
 - `PORT`, `HOST`: cổng và địa chỉ lắng nghe.
 - `APP_SECRET`: khóa ký session token.
 - `PARTNER_API_KEY`: khóa bảo vệ catalog đối tác.
-- `DATABASE_PATH`: đường dẫn tệp SQLite.
+- `DB_CLIENT`: `mysql` trong vận hành; `sqlite` chỉ dành cho kiểm thử/fallback.
+- `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`: vị trí database MySQL.
+- `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_SSL`: thông tin đăng nhập và TLS MySQL.
+- `DATABASE_PATH`: đường dẫn SQLite cũ, chỉ dùng khi di chuyển/fallback.
 - `CLIENT_ORIGIN`: origin frontend được phép gọi API trong chế độ phát triển.
 
 Nếu không đặt `APP_SECRET`, server sẽ tự sinh khóa và lưu vào
 `server/data/app.secret`.
+
+### Di chuyển SQLite cũ sang MySQL
+
+Sau khi tạo database và cập nhật `.env`, chạy:
+
+```powershell
+npm run db:migrate
+```
+
+Lệnh này tạo schema nếu cần, xóa dữ liệu đích và sao chép toàn bộ dữ liệu từ
+`DATABASE_PATH`. Hãy sao lưu MySQL trước khi chạy lại trên database đang sử dụng.
 
 ## Kiểm thử
 
@@ -154,10 +180,15 @@ docker compose up --build
 ```text
 client/                 React + Vite storefront/backoffice
 server/
-  database.js           schema, migration và dữ liệu mẫu
+  database.js           chọn MySQL/SQLite, migration và dữ liệu mẫu
+  mysql-database.js     adapter MySQL cho lớp nghiệp vụ hiện có
+  mysql-schema.js       schema MySQL/InnoDB
+  mysql-worker.js       thực thi truy vấn ngoài luồng HTTP
   security.js           scrypt, token HMAC và XML escaping
   server.js             HTTP API, RBAC, nghiệp vụ và static hosting
   tests/                 kiểm thử tích hợp bằng node:test
+scripts/
+  migrate-sqlite-to-mysql.js  chuyển dữ liệu SQLite sang MySQL
 windows-app/             Java Swing desktop, HTTP/JSON, test và đóng gói Windows
 docs/
   API.md                 hợp đồng API chính
@@ -172,3 +203,4 @@ thanh toán thật. Thẻ/ví đang dùng adapter sandbox; vận chuyển và �
 dữ liệu nội bộ. Khi triển khai thương mại, thay các adapter này bằng cổng thanh
 toán, đơn vị vận chuyển và object storage/CDN chính thức, đồng thời đặt reverse
 proxy TLS, secret manager, backup và giám sát tập trung.
+

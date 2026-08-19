@@ -8,8 +8,14 @@ biên tập viên và quản trị viên của hệ thống bán hoa trực tuy�
 - Giao diện Windows được xây dựng bằng Java Swing và lập trình hướng đối tượng.
 - Windows App chỉ gọi Backend API bằng HTTP/JSON; không kết nối trực tiếp cơ sở dữ liệu.
 - Backend chịu trách nhiệm xác thực, phân quyền, nghiệp vụ và lưu dữ liệu.
-- Hợp đồng API hiện tại tương thích với backend Node.js/SQLite; có thể thay bằng
-  PHP MVC/MySQL sau này nếu giữ nguyên endpoint và cấu trúc JSON.
+- Hợp đồng API hiện tại tương thích với backend Node.js/MySQL; việc chuyển database
+  không làm thay đổi endpoint hoặc cấu trúc JSON của Windows App.
+
+## Bản vá 1.2.1
+
+- Thay toàn bộ ký tự biểu tượng Unicode trong menu bằng icon vector Java tự vẽ.
+- Khắc phục biểu tượng bị hiển thị thành ô vuông trên một số máy Windows/runtime.
+- Icon không còn phụ thuộc vào font cài đặt trên máy người dùng.
 
 ## Chức năng
 
@@ -95,3 +101,4 @@ src/main/java/vn/flowery/staff/
   ui/         cửa sổ đăng nhập, cửa sổ chính và các màn hình chức năng
 src/test/     kiểm thử tự động
 ```
+

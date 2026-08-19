@@ -2,8 +2,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const { hashPassword } = require('./security');
+const { openMysqlDatabase } = require('./mysql-database');
 
-function openDatabase(databasePath) {
+function openDatabase(databasePath, options = {}) {
+  const client = String(options.client || process.env.DB_CLIENT || 'sqlite').toLowerCase();
+  if (client === 'mysql' && databasePath !== ':memory:') {
+    const db = openMysqlDatabase(options.mysql);
+    seed(db);
+    return db;
+  }
   if (databasePath !== ':memory:') {
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   }
@@ -360,3 +367,4 @@ function seedDeliveredOrder(db) {
 }
 
 module.exports = { openDatabase };
+
