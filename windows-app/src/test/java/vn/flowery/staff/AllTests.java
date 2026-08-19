@@ -6,7 +6,9 @@ public final class AllTests {
 
     public static void main(String[] args) throws Exception {
         JsonTest.run();
+        NavigationIconTest.run();
         ApiIntegrationTest.run();
         System.out.println("Windows App tests: PASSED");
     }
 }
+
