@@ -70,7 +70,16 @@ function readConfig(overrides = {}) {
 }
 
 function openMysqlDatabase(overrides = {}) {
-  const db = new MysqlDatabaseSync(readConfig(overrides));
+  try {
+    require.resolve('mysql2/promise');
+  } catch {
+    throw new Error('Thiếu thư viện mysql2. Hãy chạy "npm ci" trong thư mục dự án rồi thử lại.');
+  }
+  const config = readConfig(overrides);
+  if (!config.password || /^replace-with-/i.test(config.password)) {
+    throw new Error('MYSQL_PASSWORD chưa được cấu hình trong tệp .env.');
+  }
+  const db = new MysqlDatabaseSync(config);
   for (const statement of statements) db.exec(statement);
   return db;
 }
