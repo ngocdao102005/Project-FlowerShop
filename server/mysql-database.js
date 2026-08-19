@@ -63,7 +63,7 @@ function readConfig(overrides = {}) {
     host: overrides.host || process.env.MYSQL_HOST || '127.0.0.1',
     port: Number(overrides.port || process.env.MYSQL_PORT || 3306),
     database: overrides.database || process.env.MYSQL_DATABASE || 'flowery',
-    user: overrides.user || process.env.MYSQL_USER || 'flowery_app',
+    user: overrides.user || process.env.MYSQL_USER || '',
     password: overrides.password || process.env.MYSQL_PASSWORD || '',
     ssl: overrides.ssl ?? String(process.env.MYSQL_SSL || 'false').toLowerCase() === 'true',
   };
@@ -76,6 +76,9 @@ function openMysqlDatabase(overrides = {}) {
     throw new Error('Thiếu thư viện mysql2. Hãy chạy "npm ci" trong thư mục dự án rồi thử lại.');
   }
   const config = readConfig(overrides);
+  if (!config.user || /^replace-with-/i.test(config.user)) {
+    throw new Error('MYSQL_USER chưa được cấu hình trong tệp .env.');
+  }
   if (!config.password || /^replace-with-/i.test(config.password)) {
     throw new Error('MYSQL_PASSWORD chưa được cấu hình trong tệp .env.');
   }
