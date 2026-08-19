@@ -23,16 +23,19 @@ import vn.flowery.staff.service.CategoryService;
 import vn.flowery.staff.service.DashboardService;
 import vn.flowery.staff.service.OrderService;
 import vn.flowery.staff.service.ProductService;
+import vn.flowery.staff.service.RefundService;
 import vn.flowery.staff.ui.panel.CategoriesPanel;
 import vn.flowery.staff.ui.panel.DashboardPanel;
 import vn.flowery.staff.ui.panel.OrdersPanel;
 import vn.flowery.staff.ui.panel.ProductsPanel;
+import vn.flowery.staff.ui.panel.RefundsPanel;
 
 public final class MainFrame extends JFrame {
     private static final String DASHBOARD = "dashboard";
     private static final String ORDERS = "orders";
     private static final String PRODUCTS = "products";
     private static final String CATEGORIES = "categories";
+    private static final String REFUNDS = "refunds";
 
     private final AppConfig config;
     private final ApiClient apiClient;
@@ -71,8 +74,14 @@ public final class MainFrame extends JFrame {
         content.add(products, PRODUCTS);
         content.add(categories, CATEGORIES);
 
-        if (user.canManageOrdersAndStock()) {
-            content.add(new OrdersPanel(new OrderService(apiClient)), ORDERS);
+        if (user.canViewOrders()) {
+            content.add(
+                new OrdersPanel(new OrderService(apiClient), user.canManageOrdersAndStock()),
+                ORDERS
+            );
+        }
+        if (user.canHandleRefunds()) {
+            content.add(new RefundsPanel(new RefundService(apiClient)), REFUNDS);
         }
 
         JPanel root = new JPanel(new BorderLayout());
@@ -100,7 +109,7 @@ public final class MainFrame extends JFrame {
         logo.setFont(new Font("Segoe UI", Font.BOLD, 25));
         logo.setAlignmentX(LEFT_ALIGNMENT);
 
-        JLabel appName = new JLabel("STAFF SYSTEM · 1.2");
+        JLabel appName = new JLabel("STAFF SYSTEM | 1.4.0");
         appName.setForeground(new Color(179, 212, 197));
         appName.setFont(new Font("Segoe UI", Font.BOLD, 11));
         appName.setAlignmentX(LEFT_ALIGNMENT);
@@ -112,30 +121,44 @@ public final class MainFrame extends JFrame {
 
         addNavigation(
             sidebar,
-            "▦  Tổng quan",
+            "Tổng quan",
+            NavigationIcon.Type.DASHBOARD,
             DASHBOARD,
             "Tổng quan",
             "Theo dõi nhanh tình hình vận hành cửa hàng."
         );
-        if (user.canManageOrdersAndStock()) {
+        if (user.canViewOrders()) {
             addNavigation(
                 sidebar,
-                "▤  Đơn hàng",
+                "Đơn hàng",
+                NavigationIcon.Type.ORDERS,
                 ORDERS,
                 "Quản lý đơn hàng",
                 "Theo dõi và cập nhật tiến trình xử lý đơn."
             );
         }
+        if (user.canHandleRefunds()) {
+            addNavigation(
+                sidebar,
+                "Hoàn tiền",
+                NavigationIcon.Type.REFUNDS,
+                REFUNDS,
+                "Yêu cầu hoàn tiền",
+                "Duyệt hoặc từ chối yêu cầu; cổng thanh toán xác nhận hoàn tất."
+            );
+        }
         addNavigation(
             sidebar,
-            "✿  Sản phẩm hoa",
+            "Sản phẩm hoa",
+            NavigationIcon.Type.PRODUCTS,
             PRODUCTS,
             "Sản phẩm hoa",
             "CRUD catalog hoa, trạng thái bán và tồn kho."
         );
         addNavigation(
             sidebar,
-            "▣  Danh mục hoa",
+            "Danh mục hoa",
+            NavigationIcon.Type.CATEGORIES,
             CATEGORIES,
             "Danh mục hoa",
             "Tổ chức catalog và kiểm soát danh mục sử dụng."
@@ -158,7 +181,9 @@ public final class MainFrame extends JFrame {
         sidebar.add(userCard);
         sidebar.add(Box.createVerticalStrut(12));
 
-        JButton logout = Theme.navigationButton("↪  Đăng xuất");
+        JButton logout = Theme.navigationButton("Đăng xuất");
+        logout.setIcon(new NavigationIcon(NavigationIcon.Type.LOGOUT));
+        logout.setIconTextGap(12);
         logout.setAlignmentX(LEFT_ALIGNMENT);
         logout.setMaximumSize(new Dimension(Integer.MAX_VALUE, 44));
         logout.setBackground(new Color(94, 47, 47));
@@ -171,11 +196,14 @@ public final class MainFrame extends JFrame {
     private void addNavigation(
         JPanel sidebar,
         String text,
+        NavigationIcon.Type iconType,
         String card,
         String title,
         String subtitle
     ) {
         JButton button = Theme.navigationButton(text);
+        button.setIcon(new NavigationIcon(iconType));
+        button.setIconTextGap(12);
         button.setAlignmentX(LEFT_ALIGNMENT);
         button.setMaximumSize(new Dimension(Integer.MAX_VALUE, 46));
         button.setToolTipText(title);

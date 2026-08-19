@@ -320,3 +320,138 @@ test('partner catalog is protected and exports valid XML', async () => {
   assert.match(authorized.payload, /<catalog version="1\.0"/);
   assert.match(authorized.payload, /<product id="1">/);
 });
+
+test('warehouse, carrier and refund workflows enforce the documented state transitions', async () => {
+  const admin = await login('admin@flowery.vn', 'Admin@123');
+  const identities = [
+    ['workflow-customer@example.com', 'Khách Workflow', 'customer'],
+    ['workflow-warehouse@example.com', 'Kho Workflow', 'warehouse'],
+    ['workflow-support@example.com', 'CSKH Workflow', 'staff'],
+  ];
+
+  const users = {};
+  for (const [email, fullName, role] of identities) {
+    const registered = await call('/auth/register', {
+      method: 'POST',
+      body: { email, password: 'Strong123', full_name: fullName },
+    });
+    assert.equal(registered.response.status, 201);
+    users[role] = registered.payload.user;
+    if (role !== 'customer') {
+      const promoted = await call(`/admin/users/${registered.payload.user.user_id}`, {
+        method: 'PATCH',
+        token: admin.token,
+        body: { role },
+      });
+      assert.equal(promoted.response.status, 200);
+    }
+  }
+
+  const customer = await login('workflow-customer@example.com', 'Strong123');
+  const warehouse = await login('workflow-warehouse@example.com', 'Strong123');
+  const support = await login('workflow-support@example.com', 'Strong123');
+  const catalog = await call('/products?limit=1');
+  const product = catalog.payload.items[0];
+  const checkout = await call('/orders', {
+    method: 'POST',
+    token: customer.token,
+    headers: { 'Idempotency-Key': 'workflow-order-001' },
+    body: {
+      customer_name: 'Khách Workflow',
+      customer_phone: '0909000111',
+      shipping_address: '19 Đường Hoa, TP.HCM',
+      payment_method: 'CARD',
+      gift_wrap: false,
+      items: [{ product_id: product.product_id, quantity: 1 }],
+    },
+  });
+  assert.equal(checkout.response.status, 201);
+  const orderId = checkout.payload.order.order_id;
+
+  const staffCannotOperateWarehouse = await call(`/admin/orders/${orderId}`, {
+    method: 'PATCH',
+    token: support.token,
+    body: { status: 'Preparing' },
+  });
+  assert.equal(staffCannotOperateWarehouse.response.status, 403);
+
+  const invalidJump = await call(`/admin/orders/${orderId}`, {
+    method: 'PATCH',
+    token: warehouse.token,
+    body: { status: 'Delivered' },
+  });
+  assert.equal(invalidJump.response.status, 409);
+
+  const preparing = await call(`/admin/orders/${orderId}`, {
+    method: 'PATCH',
+    token: warehouse.token,
+    body: { status: 'Preparing' },
+  });
+  assert.equal(preparing.response.status, 200);
+  assert.equal(preparing.payload.order.status, 'Preparing');
+
+  const missingTracking = await call(`/admin/orders/${orderId}`, {
+    method: 'PATCH',
+    token: warehouse.token,
+    body: { status: 'Shipping' },
+  });
+  assert.equal(missingTracking.response.status, 400);
+
+  const shipping = await call(`/admin/orders/${orderId}`, {
+    method: 'PATCH',
+    token: warehouse.token,
+    body: { status: 'Shipping', carrier: 'Flowery Express', tracking_code: 'FLW-TEST-001' },
+  });
+  assert.equal(shipping.response.status, 200);
+  assert.equal(shipping.payload.order.status, 'Shipping');
+
+  const failedAttempt = await call('/integrations/shipments/FLW-TEST-001/events', {
+    method: 'POST',
+    headers: { 'X-API-Key': 'partner-test-key' },
+    body: {
+      event: 'DeliveryFailed',
+      reason: 'Khách hàng chưa thể nhận hoa',
+      retry_at: '2026-08-20T09:00:00Z',
+    },
+  });
+  assert.equal(failedAttempt.response.status, 200);
+  assert.equal(failedAttempt.payload.order.status, 'Shipping');
+
+  const delivered = await call('/integrations/shipments/FLW-TEST-001/events', {
+    method: 'POST',
+    headers: { 'X-API-Key': 'partner-test-key' },
+    body: { event: 'Delivered', proof_url: 'https://example.com/proof/FLW-TEST-001.jpg' },
+  });
+  assert.equal(delivered.response.status, 200);
+  assert.equal(delivered.payload.order.status, 'Delivered');
+
+  const refund = await call(`/orders/${orderId}/refunds`, {
+    method: 'POST',
+    token: customer.token,
+    body: {
+      reason: 'Hoa giao không đúng mẫu đã đặt trong đơn hàng.',
+      evidence_url: 'https://example.com/evidence/refund-001.jpg',
+    },
+  });
+  assert.equal(refund.response.status, 201);
+
+  const refundList = await call('/admin/refunds', { token: support.token });
+  assert.equal(refundList.response.status, 200);
+  const pending = refundList.payload.items.find((item) => item.order_id === orderId);
+  assert.ok(pending);
+
+  const approved = await call(`/admin/refunds/${pending.refund_id}`, {
+    method: 'PATCH',
+    token: support.token,
+    body: { status: 'Approved' },
+  });
+  assert.equal(approved.response.status, 200);
+
+  const completed = await call(`/integrations/refunds/${pending.refund_id}/complete`, {
+    method: 'POST',
+    headers: { 'X-API-Key': 'partner-test-key' },
+    body: { provider_reference: 'PAY-REF-001' },
+  });
+  assert.equal(completed.response.status, 200);
+  assert.equal(completed.payload.refund.status, 'Completed');
+});

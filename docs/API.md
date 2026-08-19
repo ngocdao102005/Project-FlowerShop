@@ -63,7 +63,7 @@ Prefix `/admin`; tất cả endpoint đều kiểm tra vai trò:
 
 - `GET /stats`
 - `GET/POST/PUT/DELETE /products`
-- `PATCH /products/:id/stock` (nhân viên vận hành, kho và quản trị)
+- `PATCH /products/:id/stock` (kho và quản trị)
 - `GET/POST/PUT/DELETE /categories` (DELETE là soft delete và chặn khi còn sản phẩm hoạt động)
 - `GET/PATCH /orders`
 - `GET/PATCH /reviews`
@@ -71,8 +71,23 @@ Prefix `/admin`; tất cả endpoint đều kiểm tra vai trò:
 - `GET/PATCH /refunds`
 - `GET /audit`
 
-Nhân viên kho/vận hành có quyền xử lý đơn và hoàn tiền. Biên tập viên quản lý
-catalog/đánh giá. Quản trị viên có toàn quyền.
+Nhân viên kho/quản trị cập nhật đơn theo chuỗi `Confirmed → Preparing → Shipping`;
+khi chuyển `Shipping` phải gửi `carrier` và `tracking_code`. Nhân viên CSKH/quản trị
+duyệt hoặc từ chối yêu cầu hoàn tiền đang `Pending`; họ không được tự đặt
+`Completed`. Biên tập viên quản lý catalog/đánh giá. Quản trị viên có toàn quyền.
+
+## Tích hợp vận chuyển và hoàn tiền
+
+Các endpoint sau dùng `X-API-Key` và dành cho hệ thống đối tác:
+
+| Method | Endpoint | Mục đích |
+|---|---|---|
+| GET | `/integrations/shipments/:trackingCode` | Lấy thông tin vận đơn |
+| POST | `/integrations/shipments/:trackingCode/events` | Gửi `Delivered` kèm `proof_url`, hoặc `DeliveryFailed` kèm `reason` và `retry_at` |
+| POST | `/integrations/refunds/:id/complete` | Cổng thanh toán hoàn tất yêu cầu `Approved` bằng `provider_reference` |
+
+Đơn vị vận chuyển là tác nhân duy nhất chuyển đơn `Shipping → Delivered`. Một lần
+giao thất bại không đổi trạng thái đơn mà được lưu tại `shipment_attempts` để giao lại.
 
 ## Đối tác
 

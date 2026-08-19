@@ -5,7 +5,9 @@ import java.util.Set;
 
 public record User(long id, String email, String fullName, String role) {
     private static final Set<String> STAFF_ROLES = Set.of("staff", "editor", "warehouse", "admin");
-    private static final Set<String> OPERATIONS_ROLES = Set.of("staff", "warehouse", "admin");
+    private static final Set<String> ORDER_VIEW_ROLES = Set.of("staff", "warehouse", "admin");
+    private static final Set<String> WAREHOUSE_ROLES = Set.of("warehouse", "admin");
+    private static final Set<String> SUPPORT_ROLES = Set.of("staff", "admin");
 
     public static User from(Object value) {
         Map<String, Object> source = Values.object(value);
@@ -22,7 +24,15 @@ public record User(long id, String email, String fullName, String role) {
     }
 
     public boolean canManageOrdersAndStock() {
-        return OPERATIONS_ROLES.contains(role);
+        return WAREHOUSE_ROLES.contains(role);
+    }
+
+    public boolean canViewOrders() {
+        return ORDER_VIEW_ROLES.contains(role);
+    }
+
+    public boolean canHandleRefunds() {
+        return SUPPORT_ROLES.contains(role);
     }
 
     public boolean canManageCatalog() {

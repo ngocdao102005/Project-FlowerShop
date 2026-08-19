@@ -2572,3 +2572,87 @@ td select {
     animation-iteration-count: 1 !important;
   }
 }
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(20, 38, 32, .58);
+  backdrop-filter: blur(4px);
+}
+
+.modal-card {
+  width: min(560px, 100%);
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  border: 1px solid rgba(18, 92, 68, .18);
+  border-radius: 22px;
+  padding: 28px;
+  background: #fff;
+  box-shadow: 0 24px 70px rgba(13, 48, 38, .24);
+}
+
+.modal-card > header {
+  margin-bottom: 20px;
+}
+
+.modal-card__heading,
+.modal-card__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.modal-card__heading {
+  margin-bottom: 18px;
+}
+
+.modal-card__actions {
+  justify-content: flex-end;
+  margin-top: 24px;
+}
+
+.modal-card h3,
+.modal-card p {
+  margin: 0;
+}
+
+.modal-card header p {
+  margin-top: 6px;
+  color: var(--muted);
+}
+
+.modal-card label {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  font-weight: 700;
+}
+
+.modal-card textarea,
+.modal-card input {
+  width: 100%;
+}
+
+.modal-card textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+.modal-counter {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: .84rem;
+  text-align: right;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 24px;
+}

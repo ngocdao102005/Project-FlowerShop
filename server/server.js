@@ -133,6 +133,45 @@ function requireUser(ctx, roles = null) {
   return ctx.user;
 }
 
+const orderTransitions = {
+  Confirmed: ['Preparing', 'Cancelled'],
+  Preparing: ['Shipping', 'Cancelled'],
+  Shipping: [],
+  Delivered: [],
+  Cancelled: [],
+};
+
+function assertOrderTransition(fromStatus, toStatus) {
+  if (!(orderTransitions[fromStatus] || []).includes(toStatus)) {
+    throw new HttpError(
+      409,
+      `Không thể chuyển đơn từ ${fromStatus} sang ${toStatus}.`,
+    );
+  }
+}
+
+function recordOrderTransition(db, ctx, orderId, fromStatus, toStatus, source, note = '') {
+  db.prepare(`
+    INSERT INTO order_status_history
+      (order_id, from_status, to_status, actor_user_id, source, note)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(orderId, fromStatus, toStatus, ctx.user?.user_id ?? null, source, note);
+}
+
+function restoreOrderStock(db, orderId) {
+  const items = db.prepare(`
+    SELECT product_id, quantity FROM order_items WHERE order_id = ?
+  `).all(orderId);
+  for (const item of items) {
+    if (item.product_id) {
+      db.prepare(`
+        UPDATE products SET stock_quantity = stock_quantity + ?, updated_at = CURRENT_TIMESTAMP
+        WHERE product_id = ?
+      `).run(item.quantity, item.product_id);
+    }
+  }
+}
+
 function productSelect() {
   return `
     SELECT p.*, c.name AS category_name, c.slug AS category_slug,
@@ -179,6 +218,8 @@ function registerRoutes(router, db, config) {
   const customerRoles = ['customer', 'staff', 'editor', 'warehouse', 'admin'];
   const adminRoles = ['admin'];
   const operationsRoles = ['staff', 'warehouse', 'admin'];
+  const warehouseRoles = ['warehouse', 'admin'];
+  const supportRoles = ['staff', 'admin'];
   const contentRoles = ['editor', 'admin'];
 
   router.add('GET', /^\/api\/health$/, async (ctx) => {
@@ -657,17 +698,7 @@ function registerRoutes(router, db, config) {
       if (!['Confirmed', 'Preparing'].includes(order.status)) {
         throw new HttpError(409, 'Đơn đã giao cho đơn vị vận chuyển nên không thể hủy.');
       }
-      const items = db.prepare(`
-        SELECT product_id, quantity FROM order_items WHERE order_id = ?
-      `).all(orderId);
-      for (const item of items) {
-        if (item.product_id) {
-          db.prepare(`
-            UPDATE products SET stock_quantity = stock_quantity + ?, updated_at = CURRENT_TIMESTAMP
-            WHERE product_id = ?
-          `).run(item.quantity, item.product_id);
-        }
-      }
+      restoreOrderStock(db, orderId);
       db.prepare(`
         UPDATE orders SET
           status = 'Cancelled', cancel_reason = ?,
@@ -686,6 +717,15 @@ function registerRoutes(router, db, config) {
           VALUES (?, ?, ?, ?, 'Completed')
         `).run(orderId, user.user_id, 'Hoàn tiền tự động khi hủy trước lúc giao', order.total_amount);
       }
+      recordOrderTransition(
+        db,
+        ctx,
+        orderId,
+        order.status,
+        'Cancelled',
+        'customer',
+        cleanText(body.reason || 'Khách hàng yêu cầu hủy', 300),
+      );
       db.exec('COMMIT');
     } catch (error) {
       db.exec('ROLLBACK');
@@ -711,9 +751,15 @@ function registerRoutes(router, db, config) {
     if (reason.length < 10) throw new HttpError(400, 'Vui lòng mô tả lý do hoàn tiền.');
     try {
       const result = db.prepare(`
-        INSERT INTO refund_requests (order_id, user_id, reason, amount)
-        VALUES (?, ?, ?, ?)
-      `).run(orderId, user.user_id, reason, order.total_amount);
+        INSERT INTO refund_requests (order_id, user_id, reason, evidence_url, amount)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(
+        orderId,
+        user.user_id,
+        reason,
+        cleanText(body.evidence_url, 500),
+        order.total_amount,
+      );
       audit(db, ctx, 'REQUEST_REFUND', 'refund', Number(result.lastInsertRowid));
       json(ctx.res, 201, { success: true });
     } catch (error) {
@@ -760,7 +806,132 @@ function registerRoutes(router, db, config) {
   registerAdminRoutes(router, db, {
     adminRoles,
     operationsRoles,
+    warehouseRoles,
+    supportRoles,
     contentRoles,
+  });
+
+  router.add('GET', /^\/api\/integrations\/shipments\/([A-Za-z0-9-]+)$/, async (ctx, trackingCode) => {
+    const key = ctx.req.headers['x-api-key'];
+    if (key !== partnerApiKey) throw new HttpError(401, 'Integration API key không hợp lệ.');
+    const shipment = db.prepare(`
+      SELECT s.*, o.order_number, o.customer_name, o.customer_phone,
+        o.shipping_address, o.status AS order_status
+      FROM shipments s JOIN orders o ON o.order_id = s.order_id
+      WHERE s.tracking_code = ?
+    `).get(trackingCode);
+    if (!shipment) throw new HttpError(404, 'Không tìm thấy vận đơn.');
+    json(ctx.res, 200, { shipment });
+    return true;
+  });
+
+  router.add('POST', /^\/api\/integrations\/shipments\/([A-Za-z0-9-]+)\/events$/, async (ctx, trackingCode) => {
+    const key = ctx.req.headers['x-api-key'];
+    if (key !== partnerApiKey) throw new HttpError(401, 'Integration API key không hợp lệ.');
+    const body = await readBody(ctx.req);
+    const event = cleanText(body.event, 30);
+    if (!['Delivered', 'DeliveryFailed'].includes(event)) {
+      throw new HttpError(400, 'Sự kiện giao hàng không hợp lệ.');
+    }
+    const shipment = db.prepare(`
+      SELECT s.*, o.status AS order_status
+      FROM shipments s JOIN orders o ON o.order_id = s.order_id
+      WHERE s.tracking_code = ?
+    `).get(trackingCode);
+    if (!shipment) throw new HttpError(404, 'Không tìm thấy vận đơn.');
+    if (shipment.order_status !== 'Shipping') {
+      throw new HttpError(409, 'Chỉ vận đơn đang Shipping mới nhận kết quả giao hàng.');
+    }
+
+    if (event === 'Delivered') {
+      const proofUrl = cleanText(body.proof_url, 500);
+      if (!proofUrl) throw new HttpError(400, 'Bằng chứng giao hàng là bắt buộc.');
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        db.prepare(`
+          UPDATE shipments SET status = 'Delivered', proof_url = ?,
+            delivered_at = COALESCE(NULLIF(?, ''), CURRENT_TIMESTAMP),
+            updated_at = CURRENT_TIMESTAMP
+          WHERE shipment_id = ?
+        `).run(proofUrl, cleanText(body.delivered_at, 50), shipment.shipment_id);
+        db.prepare(`
+          UPDATE orders SET status = 'Delivered', updated_at = CURRENT_TIMESTAMP
+          WHERE order_id = ?
+        `).run(shipment.order_id);
+        db.prepare(`
+          INSERT INTO shipment_attempts
+            (shipment_id, outcome, proof_url, attempted_at)
+          VALUES (?, 'Delivered', ?, COALESCE(NULLIF(?, ''), CURRENT_TIMESTAMP))
+        `).run(shipment.shipment_id, proofUrl, cleanText(body.delivered_at, 50));
+        recordOrderTransition(db, ctx, shipment.order_id, 'Shipping', 'Delivered', 'carrier');
+        db.exec('COMMIT');
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
+      audit(db, ctx, 'DELIVER_SHIPMENT', 'shipment', shipment.shipment_id, { trackingCode });
+    } else {
+      const reason = cleanText(body.reason, 500);
+      const retryAt = cleanText(body.retry_at, 50);
+      if (reason.length < 5 || !retryAt) {
+        throw new HttpError(400, 'Cần nhập lý do và thời điểm giao lại.');
+      }
+      db.prepare(`
+        INSERT INTO shipment_attempts
+          (shipment_id, outcome, reason, attempted_at, retry_at)
+        VALUES (?, 'DeliveryFailed', ?, COALESCE(NULLIF(?, ''), CURRENT_TIMESTAMP), ?)
+      `).run(
+        shipment.shipment_id,
+        reason,
+        cleanText(body.attempted_at, 50),
+        retryAt,
+      );
+      audit(db, ctx, 'SCHEDULE_REDELIVERY', 'shipment', shipment.shipment_id, { trackingCode, retryAt });
+    }
+    json(ctx.res, 200, {
+      shipment: db.prepare('SELECT * FROM shipments WHERE shipment_id = ?').get(shipment.shipment_id),
+      order: getOrder(db, shipment.order_id),
+    });
+    return true;
+  });
+
+  router.add('POST', /^\/api\/integrations\/refunds\/(\d+)\/complete$/, async (ctx, rawRefundId) => {
+    const key = ctx.req.headers['x-api-key'];
+    if (key !== partnerApiKey) throw new HttpError(401, 'Integration API key không hợp lệ.');
+    const refundId = positiveInteger(rawRefundId);
+    const body = await readBody(ctx.req);
+    const refund = db.prepare('SELECT * FROM refund_requests WHERE refund_id = ?').get(refundId);
+    if (!refund) throw new HttpError(404, 'Không tìm thấy yêu cầu hoàn tiền.');
+    if (refund.status !== 'Approved') {
+      throw new HttpError(409, 'Chỉ yêu cầu Approved mới được hoàn tất bởi cổng thanh toán.');
+    }
+    const reference = cleanText(body.provider_reference, 120);
+    if (!reference) throw new HttpError(400, 'Thiếu mã đối soát hoàn tiền.');
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare(`
+        UPDATE refund_requests SET status = 'Completed', gateway_reference = ?,
+          updated_at = CURRENT_TIMESTAMP WHERE refund_id = ?
+      `).run(reference, refundId);
+      db.prepare(`
+        UPDATE orders SET payment_status = 'Refunded', updated_at = CURRENT_TIMESTAMP
+        WHERE order_id = ?
+      `).run(refund.order_id);
+      db.prepare(`
+        UPDATE payments SET status = 'Refunded' WHERE order_id = ?
+      `).run(refund.order_id);
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+    audit(db, ctx, 'COMPLETE_REFUND', 'refund', refundId, { reference });
+    json(ctx.res, 200, {
+      success: true,
+      refund: db.prepare('SELECT * FROM refund_requests WHERE refund_id = ?').get(refundId),
+      order: getOrder(db, refund.order_id),
+    });
+    return true;
   });
 
   router.add('GET', /^\/api\/partner\/catalog(?:\.xml)?$/, async (ctx) => {
@@ -804,7 +975,13 @@ function registerRoutes(router, db, config) {
 }
 
 function registerAdminRoutes(router, db, roles) {
-  const { adminRoles, operationsRoles, contentRoles } = roles;
+  const {
+    adminRoles,
+    operationsRoles,
+    warehouseRoles,
+    supportRoles,
+    contentRoles,
+  } = roles;
 
   router.add('GET', /^\/api\/admin\/stats$/, async (ctx) => {
     requireUser(ctx, ['staff', 'editor', 'warehouse', 'admin']);
@@ -1039,7 +1216,7 @@ function registerAdminRoutes(router, db, roles) {
   });
 
   router.add('PATCH', /^\/api\/admin\/orders\/(\d+)$/, async (ctx, rawOrderId) => {
-    requireUser(ctx, operationsRoles);
+    const actor = requireUser(ctx, warehouseRoles);
     const orderId = positiveInteger(rawOrderId);
     const body = await readBody(ctx.req);
     const status = cleanText(body.status, 30);
@@ -1047,18 +1224,54 @@ function registerAdminRoutes(router, db, roles) {
     if (!allowed.includes(status)) throw new HttpError(400, 'Trạng thái không hợp lệ.');
     const order = db.prepare('SELECT * FROM orders WHERE order_id = ?').get(orderId);
     if (!order) throw new HttpError(404, 'Không tìm thấy đơn hàng.');
-    if (order.status === 'Cancelled' || order.status === 'Delivered') {
-      throw new HttpError(409, 'Đơn đã ở trạng thái kết thúc.');
+    assertOrderTransition(order.status, status);
+
+    const carrier = cleanText(body.carrier, 100);
+    const trackingCode = cleanText(body.tracking_code, 120);
+    if (status === 'Shipping' && (!carrier || !trackingCode)) {
+      throw new HttpError(400, 'Cần chọn đơn vị vận chuyển và nhập mã vận đơn.');
     }
-    db.prepare(`
-      UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE order_id = ?
-    `).run(status, orderId);
-    db.prepare(`
-      UPDATE shipments SET status = ?, proof_url = COALESCE(NULLIF(?, ''), proof_url),
-        updated_at = CURRENT_TIMESTAMP
-      WHERE order_id = ?
-    `).run(status, cleanText(body.proof_url, 500), orderId);
-    audit(db, ctx, 'UPDATE_ORDER_STATUS', 'order', orderId, { from: order.status, to: status });
+
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      if (status === 'Cancelled') restoreOrderStock(db, orderId);
+      db.prepare(`
+        UPDATE orders SET status = ?, cancel_reason = CASE WHEN ? = 'Cancelled' THEN ? ELSE cancel_reason END,
+          updated_at = CURRENT_TIMESTAMP WHERE order_id = ?
+      `).run(status, status, cleanText(body.reason || 'Nhân viên hủy đơn', 300), orderId);
+      if (status === 'Shipping') {
+        db.prepare(`
+          UPDATE shipments SET carrier = ?, tracking_code = ?, status = 'Shipping',
+            handed_over_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+          WHERE order_id = ?
+        `).run(carrier, trackingCode, orderId);
+      } else {
+        db.prepare(`
+          UPDATE shipments SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE order_id = ?
+        `).run(status, orderId);
+      }
+      recordOrderTransition(
+        db,
+        ctx,
+        orderId,
+        order.status,
+        status,
+        'backoffice',
+        status === 'Shipping' ? `${carrier} / ${trackingCode}` : '',
+      );
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      if (String(error.message).includes('UNIQUE constraint failed: shipments.tracking_code')) {
+        throw new HttpError(409, 'Mã vận đơn đã được sử dụng.');
+      }
+      throw error;
+    }
+    audit(db, ctx, 'UPDATE_ORDER_STATUS', 'order', orderId, {
+      from: order.status,
+      to: status,
+      actor_role: actor.role,
+    });
     json(ctx.res, 200, { order: getOrder(db, orderId) });
     return true;
   });
@@ -1127,7 +1340,7 @@ function registerAdminRoutes(router, db, roles) {
   });
 
   router.add('GET', /^\/api\/admin\/refunds$/, async (ctx) => {
-    requireUser(ctx, operationsRoles);
+    requireUser(ctx, supportRoles);
     const items = db.prepare(`
       SELECT rr.*, o.order_number, o.payment_status, u.full_name, u.email
       FROM refund_requests rr
@@ -1140,26 +1353,30 @@ function registerAdminRoutes(router, db, roles) {
   });
 
   router.add('PATCH', /^\/api\/admin\/refunds\/(\d+)$/, async (ctx, rawRefundId) => {
-    const user = requireUser(ctx, operationsRoles);
+    const user = requireUser(ctx, supportRoles);
     const refundId = positiveInteger(rawRefundId);
     const body = await readBody(ctx.req);
     const status = cleanText(body.status, 20);
-    if (!['Approved', 'Rejected', 'Completed'].includes(status)) {
+    if (!['Approved', 'Rejected'].includes(status)) {
       throw new HttpError(400, 'Trạng thái hoàn tiền không hợp lệ.');
     }
     const refund = db.prepare('SELECT * FROM refund_requests WHERE refund_id = ?').get(refundId);
     if (!refund) throw new HttpError(404, 'Không tìm thấy yêu cầu.');
-    db.prepare(`
-      UPDATE refund_requests SET status = ?, handled_by = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE refund_id = ?
-    `).run(status, user.user_id, refundId);
-    if (status === 'Completed') {
-      db.prepare(`
-        UPDATE orders SET payment_status = 'Refunded', updated_at = CURRENT_TIMESTAMP
-        WHERE order_id = ?
-      `).run(refund.order_id);
+    if (refund.status !== 'Pending') {
+      throw new HttpError(409, 'Chỉ yêu cầu Pending mới được duyệt hoặc từ chối.');
     }
-    audit(db, ctx, 'UPDATE_REFUND', 'refund', refundId, { status });
+    const rejectionReason = status === 'Rejected'
+      ? cleanText(body.rejection_reason, 500)
+      : '';
+    if (status === 'Rejected' && rejectionReason.length < 5) {
+      throw new HttpError(400, 'Vui lòng nhập lý do từ chối rõ ràng.');
+    }
+    db.prepare(`
+      UPDATE refund_requests SET status = ?, handled_by = ?, rejection_reason = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE refund_id = ?
+    `).run(status, user.user_id, rejectionReason, refundId);
+    audit(db, ctx, 'UPDATE_REFUND', 'refund', refundId, { status, rejectionReason });
     json(ctx.res, 200, { success: true });
     return true;
   });

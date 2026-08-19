@@ -6,13 +6,13 @@
 | Catalog và tìm kiếm | `categories`, `products`, truy vấn có tham số, bộ lọc, phân trang, gợi ý liên quan |
 | Giỏ và wishlist | `cart_items`, `wishlists`, API đồng bộ và fallback localStorage cho khách |
 | Đơn và thanh toán | transaction SQLite, tính giá lại, idempotency, payment adapter COD/sandbox |
-| Kho và giao hàng | kiểm tra/trừ/hoàn tồn kho, `shipments`, tracking, cập nhật trạng thái |
+| Kho và giao hàng | chuỗi trạng thái bắt buộc, phân quyền kho, mã vận đơn duy nhất, `order_status_history`, `shipment_attempts`, webhook giao thành công/thất bại |
 | Đánh giá và nội dung | xác minh đã mua, trạng thái Pending/Approved/Rejected, `articles` |
-| Hoàn tiền | yêu cầu theo đơn, hàng đợi backoffice, cập nhật payment status |
+| Hoàn tiền | khách gửi lý do/bằng chứng, CSKH Approved/Rejected, cổng thanh toán mới được Complete, lưu mã đối soát |
 | Partner API/XML | JSON/XML có phiên bản, escaping XML và API key |
 | Bảo mật | validation, SQL binding, password hash, token expiry, rate limit, CSP, request ID, audit log |
 | Vận hành | health check, dashboard, Docker, dữ liệu mẫu và kiểm thử tích hợp |
-| Windows App | Java Swing OOP, đăng nhập HTTP/JSON, dashboard, xử lý đơn, CRUD sản phẩm/danh mục hoa và cập nhật tồn kho |
+| Windows App | Java Swing OOP, đăng nhập HTTP/JSON, dashboard, chế độ xem đơn của CSKH, xử lý tuần tự và bàn giao của kho, màn hình duyệt hoàn tiền, CRUD sản phẩm/danh mục hoa và cập nhật tồn kho |
 
 ## Adapter cần thay khi lên production
 

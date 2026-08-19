@@ -181,7 +181,40 @@ function migrate(db) {
       metadata TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS order_status_history (
+      history_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_id INTEGER NOT NULL REFERENCES orders(order_id) ON DELETE CASCADE,
+      from_status TEXT NOT NULL,
+      to_status TEXT NOT NULL,
+      actor_user_id INTEGER REFERENCES users(user_id) ON DELETE SET NULL,
+      source TEXT NOT NULL DEFAULT 'backoffice',
+      note TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS shipment_attempts (
+      attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      shipment_id INTEGER NOT NULL REFERENCES shipments(shipment_id) ON DELETE CASCADE,
+      outcome TEXT NOT NULL CHECK (outcome IN ('DeliveryFailed', 'Delivered')),
+      reason TEXT NOT NULL DEFAULT '',
+      proof_url TEXT NOT NULL DEFAULT '',
+      attempted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      retry_at TEXT NOT NULL DEFAULT ''
+    );
   `);
+
+  ensureColumn(db, 'refund_requests', 'evidence_url', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'refund_requests', 'rejection_reason', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'refund_requests', 'gateway_reference', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'shipments', 'handed_over_at', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'shipments', 'delivered_at', "TEXT NOT NULL DEFAULT ''");
+}
+
+function ensureColumn(db, table, column, definition) {
+  const exists = db.prepare(`PRAGMA table_info(${table})`).all()
+    .some((entry) => entry.name === column);
+  if (!exists) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
 function seed(db) {

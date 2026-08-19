@@ -6,22 +6,37 @@ API Node.js, cơ sở dữ liệu SQLite tự khởi tạo và Windows App Java 
 
 Sơ đồ kiến trúc tham chiếu được lưu tại `docs/architecture.png`.
 
+## Cập nhật 1.4.0
+
+- Chuẩn hóa trạng thái đơn hàng: `Confirmed → Preparing → Shipping → Delivered`;
+  không còn cho phép nhảy trạng thái hoặc nhân viên tự xác nhận giao thành công.
+- Tách đúng trách nhiệm: kho chuẩn bị/bàn giao; CSKH xem đơn và duyệt/từ chối hoàn
+  tiền; đơn vị vận chuyển xác nhận giao hàng; cổng thanh toán hoàn tất hoàn tiền.
+- Bàn giao vận chuyển bắt buộc có đơn vị và mã vận đơn duy nhất.
+- Thêm Integration API nhận sự kiện giao thành công, giao thất bại/giao lại và xác
+  nhận hoàn tiền; lưu lịch sử chuyển trạng thái cùng các lần giao.
+- Web có modal yêu cầu hoàn tiền đầy đủ lý do và liên kết bằng chứng; Windows App có
+  màn hình CSKH xử lý hoàn tiền và UI chuyển trạng thái theo ngữ cảnh.
+- Bổ sung kiểm thử tích hợp xuyên suốt kho → vận chuyển → hoàn tiền.
+
 ## Cập nhật 1.0.2
 
 - Thay bộ font mặc định bằng font hệ thống có hỗ trợ đầy đủ dấu tiếng Việt.
 - Sửa hiện tượng dấu và ký tự bị tách trong các tiêu đề serif trên storefront và
   backoffice.
 
-## Windows App 1.2.0
+## Windows App 1.4.0
 
 Dự án có thêm ứng dụng desktop `windows-app/` dành cho staff, warehouse, editor và admin:
 
 - Java 21, Swing và kiến trúc hướng đối tượng.
 - Đăng nhập bằng Backend API, bearer token chỉ tồn tại trong phiên ứng dụng.
-- Dashboard vận hành, danh sách/cập nhật trạng thái đơn hàng.
+- Dashboard vận hành; nhân viên xem đơn, kho cập nhật tuần tự và nhập thông tin bàn giao.
+- Màn hình CSKH phê duyệt/từ chối hoàn tiền; yêu cầu đã duyệt chờ cổng thanh toán xác nhận.
 - CRUD sản phẩm hoa: thêm, xem, sửa, ngừng bán; tìm kiếm, cảnh báo sắp hết hàng và cập nhật tồn kho.
 - CRUD danh mục hoa có soft delete an toàn, kích hoạt lại và bảo vệ danh mục đang có sản phẩm.
 - UX/UI mới với menu đang chọn, toolbar thoáng, trạng thái trực quan và nút theo ngữ cảnh.
+- Bản vá icon vector loại bỏ ô vuông do thiếu glyph Unicode trên Windows.
 - Không truy cập trực tiếp SQLite/MySQL; toàn bộ dữ liệu đi qua HTTP/JSON.
 - Đóng gói `FloweryStaff.exe` kèm Java Runtime bằng `jpackage`.
 
@@ -122,7 +137,8 @@ npm run build
 ```
 
 Bộ kiểm thử tích hợp bao phủ catalog, validation tài khoản, checkout chống sửa giá,
-idempotency, tồn kho, hủy đơn, RBAC, duyệt đánh giá và Partner XML.
+idempotency, tồn kho, hủy đơn, RBAC, duyệt đánh giá, Partner XML, chuỗi trạng thái
+kho/vận chuyển và vòng đời hoàn tiền.
 
 ## Docker
 
@@ -146,6 +162,7 @@ windows-app/             Java Swing desktop, HTTP/JSON, test và đóng gói Win
 docs/
   API.md                 hợp đồng API chính
   TRACEABILITY.md        đối chiếu yêu cầu với phần đã triển khai
+  mentor/                workbook RBAC/mô tả màn hình và Draw.io wireframe/wireflow
 ```
 
 ## Phạm vi tích hợp

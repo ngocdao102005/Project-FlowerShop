@@ -669,6 +669,12 @@ function CartView({ cart, user, onQuantity, onRemove, onCheckout, onContinue, no
 
 function OrdersView({ notify }) {
   const [orders, setOrders] = useState(null)
+  const [cancelOrder, setCancelOrder] = useState(null)
+  const [cancelReason, setCancelReason] = useState('Khách hàng đổi nhu cầu')
+  const [cancelBusy, setCancelBusy] = useState(false)
+  const [refundOrder, setRefundOrder] = useState(null)
+  const [refundForm, setRefundForm] = useState({ reason: '', evidence_url: '' })
+  const [refundBusy, setRefundBusy] = useState(false)
   const load = useCallback(async () => {
     try {
       const response = await api.get('/orders/mine')
@@ -679,26 +685,48 @@ function OrdersView({ notify }) {
   }, [notify])
   useEffect(() => { load() }, [load])
 
-  const cancel = async (order) => {
-    if (!window.confirm(`Hủy đơn ${order.order_number}?`)) return
+  const openCancel = (order) => {
+    setCancelOrder(order)
+    setCancelReason('Khách hàng đổi nhu cầu')
+  }
+
+  const cancel = async (event) => {
+    event.preventDefault()
+    if (!cancelOrder) return
+    setCancelBusy(true)
     try {
-      await api.post(`/orders/${order.order_id}/cancel`, { reason: 'Khách hàng đổi nhu cầu' })
+      await api.post(`/orders/${cancelOrder.order_id}/cancel`, { reason: cancelReason.trim() || 'Khách hàng yêu cầu hủy' })
       notify('Đơn đã được hủy và tồn kho đã được hoàn lại.')
+      setCancelOrder(null)
       load()
     } catch (error) {
       notify(error.message, 'error')
+    } finally {
+      setCancelBusy(false)
     }
   }
 
-  const requestRefund = async (order) => {
-    const reason = window.prompt('Mô tả lý do yêu cầu hoàn tiền (ít nhất 10 ký tự):')
-    if (!reason) return
+  const openRefund = (order) => {
+    setRefundOrder(order)
+    setRefundForm({ reason: '', evidence_url: '' })
+  }
+
+  const requestRefund = async (event) => {
+    event.preventDefault()
+    if (!refundOrder || refundForm.reason.trim().length < 10) {
+      notify('Vui lòng mô tả lý do hoàn tiền ít nhất 10 ký tự.', 'error')
+      return
+    }
+    setRefundBusy(true)
     try {
-      await api.post(`/orders/${order.order_id}/refunds`, { reason })
+      await api.post(`/orders/${refundOrder.order_id}/refunds`, refundForm)
       notify('Yêu cầu hoàn tiền đã được tiếp nhận.')
+      setRefundOrder(null)
       load()
     } catch (error) {
       notify(error.message, 'error')
+    } finally {
+      setRefundBusy(false)
     }
   }
 
@@ -730,13 +758,54 @@ function OrdersView({ notify }) {
                 <div><span>Thanh toán</span><StatusBadge status={order.payment_status} /></div>
                 <strong>{money(order.total_amount)}</strong>
                 <div className="order-actions">
-                  {['Confirmed', 'Preparing'].includes(order.status) && <button className="button button--danger button--small" onClick={() => cancel(order)}>Hủy đơn</button>}
-                  {order.status === 'Delivered' && !order.refund_id && <button className="button button--outline button--small" onClick={() => requestRefund(order)}>Yêu cầu hoàn tiền</button>}
+                  {['Confirmed', 'Preparing'].includes(order.status) && <button className="button button--danger button--small" onClick={() => openCancel(order)}>Hủy đơn</button>}
+                  {order.status === 'Delivered' && !order.refund_id && <button className="button button--outline button--small" onClick={() => openRefund(order)}>Yêu cầu hoàn tiền</button>}
                   {order.refund_status && <span className="muted">Hoàn tiền: {order.refund_status}</span>}
                 </div>
               </footer>
             </article>
           ))}
+        </div>
+      )}
+      {cancelOrder && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => !cancelBusy && setCancelOrder(null)}>
+          <form className="modal-card" onSubmit={cancel} onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-card__heading">
+              <div><span className="eyebrow">Đơn {cancelOrder.order_number}</span><h2>Xác nhận hủy đơn</h2></div>
+              <button type="button" className="icon-button" onClick={() => setCancelOrder(null)} aria-label="Đóng"><X size={18} /></button>
+            </div>
+            <p className="muted">Tồn kho sẽ được hoàn lại. Nếu đơn đã thanh toán, hệ thống tạo hoàn tiền tự động.</p>
+            <label>Lý do hủy
+              <textarea maxLength={300} value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} placeholder="Nhập lý do để lưu lịch sử xử lý" />
+              <small>{cancelReason.length} / 300 ký tự</small>
+            </label>
+            <div className="modal-card__actions">
+              <button type="button" className="button button--outline" onClick={() => setCancelOrder(null)}>Giữ đơn hàng</button>
+              <button className="button button--danger" disabled={cancelBusy}>{cancelBusy ? 'Đang hủy...' : 'Xác nhận hủy đơn'}</button>
+            </div>
+          </form>
+        </div>
+      )}
+      {refundOrder && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => !refundBusy && setRefundOrder(null)}>
+          <form className="modal-card" onSubmit={requestRefund} onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-card__heading">
+              <div><span className="eyebrow">Đơn {refundOrder.order_number}</span><h2>Yêu cầu hoàn tiền</h2></div>
+              <button type="button" className="icon-button" onClick={() => setRefundOrder(null)} aria-label="Đóng"><X size={18} /></button>
+            </div>
+            <p className="muted">Đơn đã giao · Số tiền yêu cầu: <b>{money(refundOrder.total_amount)}</b></p>
+            <label>Lý do hoàn tiền *
+              <textarea required minLength={10} maxLength={500} value={refundForm.reason} onChange={(event) => setRefundForm({ ...refundForm, reason: event.target.value })} placeholder="Mô tả vấn đề ít nhất 10 ký tự" />
+              <small>{refundForm.reason.length} / 500 ký tự</small>
+            </label>
+            <label>Liên kết bằng chứng
+              <input type="url" maxLength={500} value={refundForm.evidence_url} onChange={(event) => setRefundForm({ ...refundForm, evidence_url: event.target.value })} placeholder="https://... (không bắt buộc)" />
+            </label>
+            <div className="modal-card__actions">
+              <button type="button" className="button button--outline" onClick={() => setRefundOrder(null)}>Hủy</button>
+              <button className="button button--primary" disabled={refundBusy || refundForm.reason.trim().length < 10}>{refundBusy ? 'Đang gửi...' : 'Gửi yêu cầu'}</button>
+            </div>
+          </form>
         </div>
       )}
     </main>
@@ -874,6 +943,16 @@ function AdminView({ notify, onLogout }) {
     }
   }
 
+  const rejectRefund = (refund) => {
+    const rejectionReason = window.prompt('Nhập lý do từ chối yêu cầu hoàn tiền (ít nhất 5 ký tự):')
+    if (!rejectionReason) return
+    mutate(
+      `/admin/refunds/${refund.refund_id}`,
+      { status: 'Rejected', rejection_reason: rejectionReason },
+      'Yêu cầu hoàn tiền đã bị từ chối.',
+    )
+  }
+
   if (!data) return <main className="shell page"><Loading label="Đang tổng hợp dữ liệu vận hành..." /></main>
   const tabs = [
     ['overview', 'Tổng quan', LayoutDashboard],
@@ -972,8 +1051,8 @@ function AdminView({ notify, onLogout }) {
           <tbody>{data.users.map((entry) => <tr key={entry.user_id}><td><b>{entry.full_name}</b><small>{entry.email}</small></td><td><select value={entry.role} onChange={(event) => mutate(`/admin/users/${entry.user_id}`, { role: event.target.value }, 'Vai trò đã được cập nhật.')}>{['customer', 'staff', 'editor', 'warehouse', 'admin'].map((role) => <option key={role}>{role}</option>)}</select></td><td>{formatDate(entry.created_at)}</td><td><span className={`status ${entry.is_locked ? 'status--cancelled' : 'status--approved'}`}>{entry.is_locked ? 'Đã khóa' : 'Hoạt động'}</span></td><td><button className="text-button" onClick={() => mutate(`/admin/users/${entry.user_id}`, { is_locked: !entry.is_locked }, entry.is_locked ? 'Tài khoản đã mở khóa.' : 'Tài khoản đã khóa.')}>{entry.is_locked ? 'Mở khóa' : 'Khóa'}</button></td></tr>)}</tbody>
         </table></div>}
 
-        {tab === 'refunds' && <div className="admin-panel table-wrap"><table><thead><tr><th>Đơn hàng</th><th>Khách hàng</th><th>Lý do</th><th>Số tiền</th><th>Trạng thái</th><th></th></tr></thead>
-          <tbody>{data.refunds.length === 0 ? <tr><td colSpan="6" className="table-empty">Chưa có yêu cầu hoàn tiền.</td></tr> : data.refunds.map((refund) => <tr key={refund.refund_id}><td><b>{refund.order_number}</b></td><td>{refund.full_name}</td><td>{refund.reason}</td><td>{money(refund.amount)}</td><td><StatusBadge status={refund.status} /></td><td>{refund.status === 'Pending' && <div className="row-actions"><button className="approve" onClick={() => mutate(`/admin/refunds/${refund.refund_id}`, { status: 'Completed' }, 'Hoàn tiền đã hoàn tất.')}><Check /></button><button className="reject" onClick={() => mutate(`/admin/refunds/${refund.refund_id}`, { status: 'Rejected' }, 'Yêu cầu đã bị từ chối.')}><X /></button></div>}</td></tr>)}</tbody>
+        {tab === 'refunds' && <div className="admin-panel table-wrap"><table><thead><tr><th>Đơn hàng</th><th>Khách hàng</th><th>Lý do / bằng chứng</th><th>Số tiền</th><th>Trạng thái</th><th></th></tr></thead>
+          <tbody>{data.refunds.length === 0 ? <tr><td colSpan="6" className="table-empty">Chưa có yêu cầu hoàn tiền.</td></tr> : data.refunds.map((refund) => <tr key={refund.refund_id}><td><b>{refund.order_number}</b></td><td>{refund.full_name}</td><td>{refund.reason}{refund.evidence_url && <small><a href={refund.evidence_url} target="_blank" rel="noreferrer">Mở bằng chứng</a></small>}{refund.rejection_reason && <small className="text-danger">Từ chối: {refund.rejection_reason}</small>}</td><td>{money(refund.amount)}</td><td><StatusBadge status={refund.status} />{refund.status === 'Approved' && <small>Chờ cổng thanh toán xác nhận</small>}</td><td>{refund.status === 'Pending' && <div className="row-actions"><button className="approve" title="Duyệt yêu cầu" onClick={() => mutate(`/admin/refunds/${refund.refund_id}`, { status: 'Approved' }, 'Yêu cầu đã được duyệt và đang chờ cổng thanh toán.')}><Check /></button><button className="reject" title="Từ chối yêu cầu" onClick={() => rejectRefund(refund)}><X /></button></div>}</td></tr>)}</tbody>
         </table></div>}
       </section>
     </main>
@@ -981,6 +1060,28 @@ function AdminView({ notify, onLogout }) {
 }
 
 function AdminOrderTable({ orders, mutate }) {
+  const optionsByStatus = {
+    Confirmed: ['Confirmed', 'Preparing', 'Cancelled'],
+    Preparing: ['Preparing', 'Shipping', 'Cancelled'],
+    Shipping: ['Shipping'],
+    Delivered: ['Delivered'],
+    Cancelled: ['Cancelled'],
+  }
+
+  const changeStatus = (order, status) => {
+    if (status === order.status) return
+    const body = { status }
+    if (status === 'Shipping') {
+      const carrier = window.prompt('Nhập đơn vị vận chuyển:', order.carrier || 'Flowery Express')
+      if (!carrier) return
+      const trackingCode = window.prompt('Nhập mã vận đơn:', order.tracking_code || '')
+      if (!trackingCode) return
+      body.carrier = carrier
+      body.tracking_code = trackingCode
+    }
+    mutate(`/admin/orders/${order.order_id}`, body, 'Trạng thái đơn hàng đã cập nhật.')
+  }
+
   return (
     <div className="table-wrap">
       <table>
@@ -990,7 +1091,7 @@ function AdminOrderTable({ orders, mutate }) {
             <td><b>{order.order_number}</b><small>{formatDate(order.created_at)}</small></td>
             <td>{order.customer_name}<small>{order.customer_phone}</small></td>
             <td>{money(order.total_amount)}</td><td><StatusBadge status={order.payment_status} /></td>
-            <td><select value={order.status} disabled={['Delivered', 'Cancelled'].includes(order.status)} onChange={(event) => mutate(`/admin/orders/${order.order_id}`, { status: event.target.value }, 'Trạng thái đơn hàng đã cập nhật.')}>{['Confirmed', 'Preparing', 'Shipping', 'Delivered', 'Cancelled'].map((status) => <option key={status} value={status}>{orderLabels[status]}</option>)}</select></td>
+            <td><select value={order.status} disabled={['Shipping', 'Delivered', 'Cancelled'].includes(order.status)} onChange={(event) => changeStatus(order, event.target.value)}>{optionsByStatus[order.status].map((status) => <option key={status} value={status}>{orderLabels[status]}</option>)}</select></td>
           </tr>
         ))}</tbody>
       </table>
