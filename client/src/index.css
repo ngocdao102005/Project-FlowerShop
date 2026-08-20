@@ -1756,6 +1756,17 @@ form textarea {
   font-size: 27px;
 }
 
+.profile-avatar--image {
+  overflow: hidden;
+  background: #edf3ee;
+}
+
+.profile-avatar--image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .profile-summary h2 {
   margin-bottom: 4px;
 }
@@ -1793,6 +1804,56 @@ form textarea {
 .profile-form {
   display: grid;
   gap: 18px;
+}
+
+.profile-forms {
+  display: grid;
+  gap: 22px;
+}
+
+.profile-form--security {
+  padding-top: 28px;
+  border-top: 1px solid var(--line);
+}
+
+.profile-form--security h2 {
+  font-size: 28px;
+}
+
+.form-alert {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 16px;
+  border: 1px solid #e7c66e;
+  border-radius: 8px;
+  background: #fff8dc;
+  color: #6e5310;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.file-control {
+  position: relative;
+  display: flex;
+  min-height: 43px;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  border: 1px dashed #aebdb6;
+  border-radius: 6px;
+  color: var(--forest);
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.file-control input,
+.file-button input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .profile-form h1 {
@@ -2039,6 +2100,15 @@ form textarea {
   justify-content: space-between;
 }
 
+.admin-form__heading > div small {
+  color: var(--muted);
+}
+
+.file-button {
+  position: relative;
+  cursor: pointer;
+}
+
 .admin-form-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -2048,6 +2118,10 @@ form textarea {
 
 .admin-form-grid .wide {
   grid-column: span 2;
+}
+
+.admin-form-grid select[multiple] {
+  min-height: 112px;
 }
 
 .admin-form--compact {
@@ -2145,6 +2219,17 @@ td select {
 .row-actions button.approve {
   background: #e2efe6;
   color: #2b7047;
+}
+
+.row-actions--text {
+  justify-content: flex-start;
+}
+
+.row-actions--text .button {
+  display: inline-flex;
+  width: auto;
+  height: auto;
+  padding: 11px 18px;
 }
 
 .text-danger {

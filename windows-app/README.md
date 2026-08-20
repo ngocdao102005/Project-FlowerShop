@@ -1,7 +1,7 @@
 # Flowery Staff — Windows App
 
-Flowery Staff là ứng dụng desktop Java dành cho nhân viên vận hành, nhân viên kho,
-biên tập viên và quản trị viên của hệ thống bán hoa trực tuyến.
+Flowery Staff là ứng dụng desktop Java dành cho nhân viên vận hành, biên tập viên
+và quản trị viên của hệ thống bán hoa trực tuyến.
 
 Ứng dụng tuân thủ kiến trúc Hybrid System:
 
@@ -10,6 +10,13 @@ biên tập viên và quản trị viên của hệ thống bán hoa trực tuy�
 - Backend chịu trách nhiệm xác thực, phân quyền, nghiệp vụ và lưu dữ liệu.
 - Hợp đồng API hiện tại tương thích với backend Node.js/MySQL; việc chuyển database
   không làm thay đổi endpoint hoặc cấu trúc JSON của Windows App.
+
+## Phiên bản 1.6.0
+
+- Chuẩn hóa vai trò `staff`, `editor`, `admin`; Staff đảm nhiệm catalog, tồn kho,
+  đơn hàng và hoàn tiền, Editor đảm nhiệm cẩm nang hoa.
+- Bổ sung màn hình cẩm nang với tạo, xem, sửa, gửi duyệt, xuất bản và lưu trữ.
+- Tiếp tục dùng icon vector tự vẽ để không phụ thuộc glyph/font trên Windows.
 
 ## Bản vá 1.2.1
 
@@ -27,7 +34,8 @@ biên tập viên và quản trị viên của hệ thống bán hoa trực tuy�
 - CRUD danh mục hoa: thêm, xem, sửa, ngừng sử dụng và kích hoạt lại.
 - Bảo vệ danh mục đang có sản phẩm hoạt động để tránh làm hỏng catalog.
 - Tìm kiếm cục bộ và cảnh báo hàng còn từ 10 sản phẩm trở xuống.
-- Cập nhật tồn kho dành cho staff, warehouse và admin.
+- Cập nhật tồn kho dành cho staff và admin.
+- Quản lý vòng đời cẩm nang dành cho editor và admin.
 - Đăng xuất xóa bearer token khỏi bộ nhớ và quay lại màn hình đăng nhập.
 
 ## UX/UI phiên bản 1.2.0
@@ -42,11 +50,8 @@ biên tập viên và quản trị viên của hệ thống bán hoa trực tuy�
 
 1. Khởi động Backend API của dự án chính tại `http://127.0.0.1:5000`.
 2. Mở `FloweryStaff.exe` trong thư mục `dist\FloweryStaff`.
-3. Đăng nhập tài khoản mẫu:
-
-| Vai trò | Email | Mật khẩu |
-|---|---|---|
-| Quản trị | `admin@flowery.vn` | `Admin@123` |
+3. Đăng nhập bằng tài khoản Staff, Editor hoặc Admin đã được cấp. Ứng dụng không
+   điền sẵn hay lưu tên đăng nhập/mật khẩu.
 
 Bản đóng gói chứa sẵn Java Runtime nên máy người dùng không phải cài JDK.
 
@@ -98,7 +103,6 @@ src/main/java/vn/flowery/staff/
   json/       parser/serializer JSON không dùng thư viện ngoài
   model/      User, DashboardStats, Order, Product
   service/    lớp nghiệp vụ giao tiếp API
-  ui/         cửa sổ đăng nhập, cửa sổ chính và các màn hình chức năng
+  ui/         cửa sổ đăng nhập, cửa sổ chính và các màn hình chức năng/cẩm nang
 src/test/     kiểm thử tự động
 ```
-

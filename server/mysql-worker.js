@@ -78,4 +78,3 @@ async function handle(message) {
 port.on('message', (message) => {
   handle(message);
 });
-

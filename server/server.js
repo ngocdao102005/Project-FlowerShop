@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
+const zlib = require('node:zlib');
 const { openDatabase } = require('./database');
 const {
   escapeXml,
@@ -45,12 +46,12 @@ function text(res, status, body, contentType = 'text/plain; charset=utf-8') {
   res.end(body);
 }
 
-async function readBody(req) {
+async function readBody(req, maxBytes = 1024 * 1024) {
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 1024 * 1024) throw new HttpError(413, 'Dữ liệu gửi lên quá lớn.');
+    if (size > maxBytes) throw new HttpError(413, 'Dữ liệu gửi lên quá lớn.');
     chunks.push(chunk);
   }
   if (chunks.length === 0) return {};
@@ -70,6 +71,112 @@ function positiveInteger(value, fallback = null) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function normalizePhone(value) {
+  const raw = String(value || '').replace(/[\s().-]/g, '');
+  if (!raw) return '';
+  const normalized = raw.startsWith('+84') ? `0${raw.slice(3)}` : raw;
+  if (!/^0(3|5|7|8|9)\d{8}$/.test(normalized)) {
+    throw new HttpError(400, 'Số điện thoại Việt Nam không hợp lệ.');
+  }
+  return normalized;
+}
+
+function validateAvatar(value) {
+  const avatar = String(value || '').trim();
+  if (!avatar) return '';
+  if (avatar.startsWith('/api/media/')) return avatar.slice(0, 500);
+  if (!/^data:image\/(png|jpeg|webp);base64,[a-z0-9+/=]+$/i.test(avatar)) {
+    throw new HttpError(400, 'Ảnh đại diện phải là PNG, JPEG hoặc WebP hợp lệ.');
+  }
+  if (Buffer.byteLength(avatar, 'utf8') > 120 * 1024) {
+    throw new HttpError(413, 'Ảnh đại diện vượt quá 120 KB sau khi tối ưu.');
+  }
+  return avatar;
+}
+
+function sanitizeRichText(value, maxLength = 120000) {
+  return String(value || '')
+    .replace(/<\/?(?:script|style|iframe|object|embed|form)[^>]*>/gi, '')
+    .replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/(?:javascript|vbscript):/gi, '')
+    .trim()
+    .slice(0, maxLength);
+}
+
+function decodeXmlText(value) {
+  return value
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+function readZipEntries(buffer) {
+  let endOffset = -1;
+  for (let index = buffer.length - 22; index >= Math.max(0, buffer.length - 65557); index -= 1) {
+    if (buffer.readUInt32LE(index) === 0x06054b50) {
+      endOffset = index;
+      break;
+    }
+  }
+  if (endOffset < 0) throw new HttpError(400, 'Tệp DOCX không hợp lệ.');
+  const count = buffer.readUInt16LE(endOffset + 10);
+  let cursor = buffer.readUInt32LE(endOffset + 16);
+  const entries = new Map();
+  for (let index = 0; index < count; index += 1) {
+    if (buffer.readUInt32LE(cursor) !== 0x02014b50) throw new HttpError(400, 'Cấu trúc DOCX bị lỗi.');
+    const method = buffer.readUInt16LE(cursor + 10);
+    const compressedSize = buffer.readUInt32LE(cursor + 20);
+    const nameLength = buffer.readUInt16LE(cursor + 28);
+    const extraLength = buffer.readUInt16LE(cursor + 30);
+    const commentLength = buffer.readUInt16LE(cursor + 32);
+    const localOffset = buffer.readUInt32LE(cursor + 42);
+    const name = buffer.subarray(cursor + 46, cursor + 46 + nameLength).toString('utf8');
+    if (buffer.readUInt32LE(localOffset) !== 0x04034b50) throw new HttpError(400, 'Tệp DOCX bị lỗi dữ liệu.');
+    const localNameLength = buffer.readUInt16LE(localOffset + 26);
+    const localExtraLength = buffer.readUInt16LE(localOffset + 28);
+    const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+    const compressed = buffer.subarray(dataStart, dataStart + compressedSize);
+    const data = method === 0 ? compressed : method === 8 ? zlib.inflateRawSync(compressed) : null;
+    if (data) entries.set(name, data);
+    cursor += 46 + nameLength + extraLength + commentLength;
+  }
+  return entries;
+}
+
+function extractDocx(buffer) {
+  const entries = readZipEntries(buffer);
+  const documentXml = entries.get('word/document.xml');
+  if (!documentXml) throw new HttpError(400, 'DOCX không có nội dung Word hợp lệ.');
+  const xml = documentXml.toString('utf8');
+  const paragraphs = [...xml.matchAll(/<w:p(?:\s[^>]*)?>([\s\S]*?)<\/w:p>/g)]
+    .map((paragraphMatch) => {
+      const paragraph = paragraphMatch[1]
+        .replace(/<w:tab\s*\/>/g, '\t')
+        .replace(/<w:br[^>]*\/>/g, '\n');
+      return [...paragraph.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g)]
+        .map((match) => decodeXmlText(match[1]))
+        .join('');
+    })
+    .filter(Boolean);
+  const content = paragraphs.join('\n\n').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  const media = [];
+  for (const [name, data] of entries) {
+    if (!name.startsWith('word/media/')) continue;
+    const extension = path.extname(name).toLowerCase();
+    const mimeType = ({ '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' })[extension];
+    if (!mimeType || data.length > 2 * 1024 * 1024) continue;
+    media.push({
+      file_name: path.basename(name),
+      mime_type: mimeType,
+      data_url: `data:${mimeType};base64,${data.toString('base64')}`,
+      checksum: crypto.createHash('sha256').update(data).digest('hex'),
+    });
+  }
+  return { content, media };
+}
+
 function isUniqueViolation(error) {
   return error?.code === 'ER_DUP_ENTRY'
     || error?.code === 'SQLITE_CONSTRAINT_UNIQUE'
@@ -84,8 +191,10 @@ function publicUser(row) {
     phone_number: row.phone_number,
     address: row.address,
     default_message: row.default_message,
+    avatar_url: row.avatar_url || '',
     role: row.role,
     is_locked: Boolean(row.is_locked),
+    must_change_password: Boolean(row.must_change_password),
     created_at: row.created_at,
   };
 }
@@ -108,7 +217,13 @@ function createRouter() {
 }
 
 function generateSecret(secretPath) {
-  if (process.env.APP_SECRET) return process.env.APP_SECRET;
+  if (process.env.APP_SECRET) {
+    const configured = String(process.env.APP_SECRET).trim();
+    if (configured.length < 32 || /^replace-with-/i.test(configured)) {
+      throw new Error('APP_SECRET phải là chuỗi bí mật ngẫu nhiên dài ít nhất 32 ký tự.');
+    }
+    return configured;
+  }
   fs.mkdirSync(path.dirname(secretPath), { recursive: true });
   if (fs.existsSync(secretPath)) return fs.readFileSync(secretPath, 'utf8').trim();
   const secret = crypto.randomBytes(48).toString('base64url');
@@ -213,18 +328,20 @@ function getOrder(db, orderId, userId = null) {
   `).get(...params);
   if (!order) return null;
   order.items = db.prepare(`
-    SELECT order_item_id, product_id, product_name, unit_price, quantity, line_total
-    FROM order_items WHERE order_id = ? ORDER BY order_item_id
+    SELECT oi.order_item_id, oi.product_id, oi.product_name, oi.unit_price,
+      oi.quantity, oi.line_total, r.review_id, r.status AS review_status
+    FROM order_items oi
+    LEFT JOIN reviews r ON r.order_item_id = oi.order_item_id
+    WHERE oi.order_id = ? ORDER BY oi.order_item_id
   `).all(orderId);
   return order;
 }
 
 function registerRoutes(router, db, config) {
   const { secret, partnerApiKey } = config;
-  const customerRoles = ['customer', 'staff', 'editor', 'warehouse', 'admin'];
+  const customerRoles = ['customer', 'staff', 'editor', 'admin'];
   const adminRoles = ['admin'];
-  const operationsRoles = ['staff', 'warehouse', 'admin'];
-  const warehouseRoles = ['warehouse', 'admin'];
+  const operationsRoles = ['staff', 'admin'];
   const supportRoles = ['staff', 'admin'];
   const contentRoles = ['editor', 'admin'];
 
@@ -260,7 +377,7 @@ function registerRoutes(router, db, config) {
         email,
         hashPassword(password),
         fullName,
-        cleanText(body.phone_number, 30),
+        normalizePhone(body.phone_number),
         cleanText(body.address, 300),
         cleanText(body.default_message, 300),
       );
@@ -309,21 +426,73 @@ function registerRoutes(router, db, config) {
     const body = await readBody(ctx.req);
     const fullName = cleanText(body.full_name ?? user.full_name, 120);
     if (fullName.length < 2) throw new HttpError(400, 'Họ tên không hợp lệ.');
+    const phoneNumber = normalizePhone(body.phone_number ?? user.phone_number);
+    const address = cleanText(body.address ?? user.address, 500);
+    if (address && address.length < 8) throw new HttpError(400, 'Địa chỉ cần ít nhất 8 ký tự.');
+    const avatarUrl = validateAvatar(body.avatar_url ?? user.avatar_url);
     db.prepare(`
       UPDATE users SET
-        full_name = ?, phone_number = ?, address = ?, default_message = ?,
+        full_name = ?, phone_number = ?, address = ?, default_message = ?, avatar_url = ?,
         updated_at = CURRENT_TIMESTAMP
       WHERE user_id = ?
     `).run(
       fullName,
-      cleanText(body.phone_number ?? user.phone_number, 30),
-      cleanText(body.address ?? user.address, 300),
+      phoneNumber,
+      address,
       cleanText(body.default_message ?? user.default_message, 300),
+      avatarUrl,
       user.user_id,
     );
     const updated = db.prepare('SELECT * FROM users WHERE user_id = ?').get(user.user_id);
     audit(db, ctx, 'UPDATE_PROFILE', 'user', user.user_id);
     json(ctx.res, 200, { user: publicUser(updated) });
+    return true;
+  });
+
+  router.add('PATCH', /^\/api\/me\/password$/, async (ctx) => {
+    const user = requireUser(ctx, customerRoles);
+    const body = await readBody(ctx.req);
+    const currentPassword = String(body.current_password || '');
+    const newPassword = String(body.new_password || '');
+    if (!verifyPassword(currentPassword, user.password_hash)) {
+      throw new HttpError(400, 'Mật khẩu hiện tại không đúng.');
+    }
+    if (!isStrongPassword(newPassword)) {
+      throw new HttpError(400, 'Mật khẩu mới phải có ít nhất 8 ký tự, gồm chữ và số.');
+    }
+    if (currentPassword === newPassword) {
+      throw new HttpError(400, 'Mật khẩu mới phải khác mật khẩu hiện tại.');
+    }
+    db.prepare(`
+      UPDATE users SET password_hash = ?, must_change_password = 0,
+        updated_at = CURRENT_TIMESTAMP WHERE user_id = ?
+    `).run(hashPassword(newPassword), user.user_id);
+    audit(db, ctx, 'CHANGE_PASSWORD', 'user', user.user_id);
+    const updated = db.prepare('SELECT * FROM users WHERE user_id = ?').get(user.user_id);
+    json(ctx.res, 200, { success: true, user: publicUser(updated) });
+    return true;
+  });
+
+  router.add('GET', /^\/api\/me\/reviewable-items$/, async (ctx) => {
+    const user = requireUser(ctx, customerRoles);
+    const productId = positiveInteger(ctx.url.searchParams.get('product_id'));
+    const conditions = ["o.user_id = ?", "o.status = 'Delivered'"];
+    const params = [user.user_id];
+    if (productId) {
+      conditions.push('oi.product_id = ?');
+      params.push(productId);
+    }
+    const items = db.prepare(`
+      SELECT oi.order_item_id, oi.order_id, oi.product_id, oi.product_name,
+        o.order_number, o.status AS order_status, o.created_at AS order_created_at,
+        r.review_id, r.status AS review_status
+      FROM order_items oi
+      JOIN orders o ON o.order_id = oi.order_id
+      LEFT JOIN reviews r ON r.order_item_id = oi.order_item_id
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY o.created_at DESC, oi.order_item_id DESC
+    `).all(...params);
+    json(ctx.res, 200, { items });
     return true;
   });
 
@@ -446,9 +615,20 @@ function registerRoutes(router, db, config) {
 
   router.add('GET', /^\/api\/articles$/, async (ctx) => {
     const items = db.prepare(`
-      SELECT article_id, title, slug, summary, content, created_at
-      FROM articles WHERE published = 1 ORDER BY created_at DESC
+      SELECT article_id, title, slug, summary, content, published_at, created_at
+      FROM articles
+      WHERE published = 1 AND status = 'Published'
+      ORDER BY published_at DESC, created_at DESC
     `).all();
+    for (const article of items) {
+      article.products = db.prepare(`
+        SELECT p.product_id, p.name, p.slug, p.image_url, p.price
+        FROM article_product_links l
+        JOIN products p ON p.product_id = l.product_id
+        WHERE l.article_id = ? AND p.active = 1
+        ORDER BY l.display_order, p.product_id
+      `).all(article.article_id);
+    }
     json(ctx.res, 200, { items });
     return true;
   });
@@ -777,9 +957,8 @@ function registerRoutes(router, db, config) {
     return true;
   });
 
-  router.add('POST', /^\/api\/products\/(\d+)\/reviews$/, async (ctx, rawProductId) => {
+  async function createReview(ctx, orderItemId, expectedProductId = null) {
     const user = requireUser(ctx, customerRoles);
-    const productId = positiveInteger(rawProductId);
     const body = await readBody(ctx.req);
     const rating = positiveInteger(body.rating);
     const comment = cleanText(body.comment, 1000);
@@ -787,32 +966,57 @@ function registerRoutes(router, db, config) {
       throw new HttpError(400, 'Đánh giá cần từ 1-5 sao và nội dung ít nhất 5 ký tự.');
     }
     const purchased = db.prepare(`
-      SELECT 1
+      SELECT oi.order_item_id, oi.product_id
       FROM orders o JOIN order_items oi ON oi.order_id = o.order_id
-      WHERE o.user_id = ? AND o.status = 'Delivered' AND oi.product_id = ?
-      LIMIT 1
-    `).get(user.user_id, productId);
-    if (!purchased) throw new HttpError(403, 'Bạn chỉ có thể đánh giá sản phẩm đã nhận.');
+      WHERE o.user_id = ? AND o.status = 'Delivered' AND oi.order_item_id = ?
+    `).get(user.user_id, orderItemId);
+    if (!purchased || (expectedProductId && purchased.product_id !== expectedProductId)) {
+      throw new HttpError(403, 'Bạn chỉ có thể đánh giá đúng dòng sản phẩm thuộc đơn đã nhận.');
+    }
     try {
       const result = db.prepare(`
-        INSERT INTO reviews (user_id, product_id, rating, comment)
-        VALUES (?, ?, ?, ?)
-      `).run(user.user_id, productId, rating, comment);
+        INSERT INTO reviews (user_id, order_item_id, product_id, rating, comment)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(user.user_id, orderItemId, purchased.product_id, rating, comment);
       audit(db, ctx, 'CREATE_REVIEW', 'review', Number(result.lastInsertRowid));
-      json(ctx.res, 201, { message: 'Đánh giá đã được gửi và đang chờ duyệt.' });
+      json(ctx.res, 201, {
+        message: 'Đánh giá đã được gửi và đang chờ duyệt.',
+        order_item_id: orderItemId,
+      });
     } catch (error) {
       if (isUniqueViolation(error)) {
-        throw new HttpError(409, 'Bạn đã đánh giá sản phẩm này.');
+        throw new HttpError(409, 'Dòng sản phẩm trong đơn này đã được đánh giá.');
       }
       throw error;
     }
+  }
+
+  router.add('POST', /^\/api\/order-items\/(\d+)\/reviews$/, async (ctx, rawOrderItemId) => {
+    await createReview(ctx, positiveInteger(rawOrderItemId));
+    return true;
+  });
+
+  router.add('POST', /^\/api\/products\/(\d+)\/reviews$/, async (ctx, rawProductId) => {
+    const user = requireUser(ctx, customerRoles);
+    const productId = positiveInteger(rawProductId);
+    const item = db.prepare(`
+      SELECT oi.order_item_id
+      FROM orders o
+      JOIN order_items oi ON oi.order_id = o.order_id
+      LEFT JOIN reviews r ON r.order_item_id = oi.order_item_id
+      WHERE o.user_id = ? AND o.status = 'Delivered' AND oi.product_id = ?
+        AND r.review_id IS NULL
+      ORDER BY o.created_at DESC, oi.order_item_id DESC
+      LIMIT 1
+    `).get(user.user_id, productId);
+    if (!item) throw new HttpError(403, 'Không còn dòng đơn đã giao nào đủ điều kiện đánh giá.');
+    await createReview(ctx, item.order_item_id, productId);
     return true;
   });
 
   registerAdminRoutes(router, db, {
     adminRoles,
     operationsRoles,
-    warehouseRoles,
     supportRoles,
     contentRoles,
   });
@@ -984,13 +1188,12 @@ function registerAdminRoutes(router, db, roles) {
   const {
     adminRoles,
     operationsRoles,
-    warehouseRoles,
     supportRoles,
     contentRoles,
   } = roles;
 
   router.add('GET', /^\/api\/admin\/stats$/, async (ctx) => {
-    requireUser(ctx, ['staff', 'editor', 'warehouse', 'admin']);
+    requireUser(ctx, ['staff', 'editor', 'admin']);
     const stats = {
       revenue: db.prepare(`
         SELECT COALESCE(SUM(total_amount), 0) AS value FROM orders
@@ -1015,7 +1218,7 @@ function registerAdminRoutes(router, db, roles) {
   });
 
   router.add('GET', /^\/api\/admin\/products$/, async (ctx) => {
-    requireUser(ctx, ['staff', 'editor', 'warehouse', 'admin']);
+    requireUser(ctx, operationsRoles);
     const items = db.prepare(`
       ${productSelect()}
       ORDER BY p.active DESC, p.updated_at DESC, p.product_id DESC
@@ -1053,7 +1256,7 @@ function registerAdminRoutes(router, db, roles) {
   });
 
   router.add('POST', /^\/api\/admin\/products$/, async (ctx) => {
-    requireUser(ctx, contentRoles);
+    requireUser(ctx, operationsRoles);
     const body = await readBody(ctx.req);
     const product = validateProduct(body);
     try {
@@ -1089,7 +1292,7 @@ function registerAdminRoutes(router, db, roles) {
   });
 
   router.add('PUT', /^\/api\/admin\/products\/(\d+)$/, async (ctx, rawProductId) => {
-    requireUser(ctx, contentRoles);
+    requireUser(ctx, operationsRoles);
     const productId = positiveInteger(rawProductId);
     const existing = db.prepare('SELECT * FROM products WHERE product_id = ?').get(productId);
     if (!existing) throw new HttpError(404, 'Không tìm thấy sản phẩm.');
@@ -1123,7 +1326,7 @@ function registerAdminRoutes(router, db, roles) {
   });
 
   router.add('DELETE', /^\/api\/admin\/products\/(\d+)$/, async (ctx, rawProductId) => {
-    requireUser(ctx, contentRoles);
+    requireUser(ctx, operationsRoles);
     const productId = positiveInteger(rawProductId);
     const result = db.prepare(`
       UPDATE products SET active = 0, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?
@@ -1135,7 +1338,7 @@ function registerAdminRoutes(router, db, roles) {
   });
 
   router.add('GET', /^\/api\/admin\/categories$/, async (ctx) => {
-    requireUser(ctx, ['staff', 'editor', 'warehouse', 'admin']);
+    requireUser(ctx, operationsRoles);
     const items = db.prepare(`
       SELECT c.*, COUNT(p.product_id) AS product_count
       FROM categories c LEFT JOIN products p ON p.category_id = c.category_id
@@ -1146,7 +1349,7 @@ function registerAdminRoutes(router, db, roles) {
   });
 
   router.add('POST', /^\/api\/admin\/categories$/, async (ctx) => {
-    requireUser(ctx, contentRoles);
+    requireUser(ctx, operationsRoles);
     const body = await readBody(ctx.req);
     const name = cleanText(body.name, 100);
     const slug = slugify(body.slug || name);
@@ -1166,7 +1369,7 @@ function registerAdminRoutes(router, db, roles) {
   });
 
   router.add('PUT', /^\/api\/admin\/categories\/(\d+)$/, async (ctx, rawCategoryId) => {
-    requireUser(ctx, contentRoles);
+    requireUser(ctx, operationsRoles);
     const categoryId = positiveInteger(rawCategoryId);
     const body = await readBody(ctx.req);
     const existing = db.prepare('SELECT * FROM categories WHERE category_id = ?').get(categoryId);
@@ -1189,7 +1392,7 @@ function registerAdminRoutes(router, db, roles) {
   });
 
   router.add('DELETE', /^\/api\/admin\/categories\/(\d+)$/, async (ctx, rawCategoryId) => {
-    requireUser(ctx, contentRoles);
+    requireUser(ctx, operationsRoles);
     const categoryId = positiveInteger(rawCategoryId);
     const existing = db.prepare('SELECT * FROM categories WHERE category_id = ?').get(categoryId);
     if (!existing) throw new HttpError(404, 'Không tìm thấy danh mục.');
@@ -1212,6 +1415,162 @@ function registerAdminRoutes(router, db, roles) {
     return true;
   });
 
+  router.add('GET', /^\/api\/admin\/articles$/, async (ctx) => {
+    requireUser(ctx, contentRoles);
+    const rows = db.prepare(`
+      SELECT article_id FROM articles
+      ORDER BY CASE status WHEN 'InReview' THEN 0 WHEN 'Draft' THEN 1 WHEN 'Published' THEN 2 ELSE 3 END,
+        updated_at DESC, article_id DESC
+    `).all();
+    json(ctx.res, 200, { items: rows.map((row) => getAdminArticle(db, row.article_id)) });
+    return true;
+  });
+
+  router.add('POST', /^\/api\/admin\/articles$/, async (ctx) => {
+    const actor = requireUser(ctx, contentRoles);
+    const body = await readBody(ctx.req);
+    const article = validateArticle(body);
+    try {
+      const result = db.prepare(`
+        INSERT INTO articles
+          (author_id, title, slug, summary, content, status, published, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
+      `).run(actor.user_id, article.title, article.slug, article.summary, article.content, article.status);
+      const articleId = Number(result.lastInsertRowid);
+      syncArticleProducts(db, articleId, article.productIds);
+      audit(db, ctx, 'CREATE_ARTICLE', 'article', articleId, { status: article.status });
+      json(ctx.res, 201, { item: getAdminArticle(db, articleId) });
+    } catch (error) {
+      if (isUniqueViolation(error)) throw new HttpError(409, 'Slug bài viết đã tồn tại.');
+      throw error;
+    }
+    return true;
+  });
+
+  router.add('POST', /^\/api\/admin\/articles\/import$/, async (ctx) => {
+    const actor = requireUser(ctx, contentRoles);
+    const body = await readBody(ctx.req, 14 * 1024 * 1024);
+    const fileName = cleanText(body.file_name, 500);
+    if (!fileName.toLowerCase().endsWith('.docx')) {
+      throw new HttpError(400, 'Chỉ hỗ trợ tệp DOCX.');
+    }
+    let buffer;
+    try {
+      buffer = Buffer.from(String(body.docx_base64 || ''), 'base64');
+    } catch {
+      throw new HttpError(400, 'Dữ liệu DOCX không hợp lệ.');
+    }
+    if (buffer.length < 100 || buffer.length > 10 * 1024 * 1024 || buffer.readUInt16LE(0) !== 0x4b50) {
+      throw new HttpError(400, 'Tệp DOCX trống, quá lớn hoặc sai định dạng.');
+    }
+    const extracted = extractDocx(buffer);
+    const fallbackTitle = path.basename(fileName, path.extname(fileName)).replace(/[-_]+/g, ' ');
+    const article = validateArticle({
+      title: body.title || fallbackTitle,
+      summary: body.summary || extracted.content.slice(0, 240),
+      content: extracted.content,
+      status: 'Draft',
+      product_ids: body.product_ids,
+    });
+    const result = db.prepare(`
+      INSERT INTO articles
+        (author_id, title, slug, summary, content, status, published,
+         source_filename, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'Draft', 0, ?, CURRENT_TIMESTAMP)
+    `).run(actor.user_id, article.title, article.slug, article.summary, article.content, fileName);
+    const articleId = Number(result.lastInsertRowid);
+    syncArticleProducts(db, articleId, article.productIds);
+    const insertMedia = db.prepare(`
+      INSERT INTO media_assets
+        (article_id, file_name, mime_type, data_url, checksum, created_by)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    for (const media of extracted.media) {
+      insertMedia.run(
+        articleId,
+        media.file_name,
+        media.mime_type,
+        media.data_url,
+        media.checksum,
+        actor.user_id,
+      );
+    }
+    audit(db, ctx, 'IMPORT_ARTICLE_DOCX', 'article', articleId, {
+      file_name: fileName,
+      media_count: extracted.media.length,
+    });
+    json(ctx.res, 201, {
+      item: getAdminArticle(db, articleId),
+      warnings: extracted.media.length
+        ? ['Ảnh đã được lưu vào thư viện; hãy đặt lại vị trí ảnh trong trình biên tập trước khi xuất bản.']
+        : [],
+    });
+    return true;
+  });
+
+  router.add('PUT', /^\/api\/admin\/articles\/(\d+)$/, async (ctx, rawArticleId) => {
+    const actor = requireUser(ctx, contentRoles);
+    const articleId = positiveInteger(rawArticleId);
+    const existing = db.prepare('SELECT * FROM articles WHERE article_id = ?').get(articleId);
+    if (!existing) throw new HttpError(404, 'Không tìm thấy bài viết.');
+    const body = await readBody(ctx.req);
+    const article = validateArticle(body, existing);
+    try {
+      db.prepare(`
+        UPDATE articles SET author_id = ?, title = ?, slug = ?, summary = ?, content = ?,
+          status = ?, published = CASE WHEN ? = 'Published' THEN 1 ELSE 0 END,
+          version = version + 1, updated_at = CURRENT_TIMESTAMP
+        WHERE article_id = ?
+      `).run(
+        actor.user_id,
+        article.title,
+        article.slug,
+        article.summary,
+        article.content,
+        article.status,
+        article.status,
+        articleId,
+      );
+      syncArticleProducts(db, articleId, article.productIds);
+      audit(db, ctx, 'UPDATE_ARTICLE', 'article', articleId, { status: article.status });
+      json(ctx.res, 200, { item: getAdminArticle(db, articleId) });
+    } catch (error) {
+      if (isUniqueViolation(error)) throw new HttpError(409, 'Slug bài viết đã tồn tại.');
+      throw error;
+    }
+    return true;
+  });
+
+  router.add('POST', /^\/api\/admin\/articles\/(\d+)\/publish$/, async (ctx, rawArticleId) => {
+    requireUser(ctx, contentRoles);
+    const articleId = positiveInteger(rawArticleId);
+    const article = db.prepare('SELECT * FROM articles WHERE article_id = ?').get(articleId);
+    if (!article) throw new HttpError(404, 'Không tìm thấy bài viết.');
+    validateArticle(article, article);
+    db.prepare(`
+      UPDATE articles SET status = 'Published', published = 1,
+        published_at = CURRENT_TIMESTAMP, version = version + 1,
+        updated_at = CURRENT_TIMESTAMP WHERE article_id = ?
+    `).run(articleId);
+    audit(db, ctx, 'PUBLISH_ARTICLE', 'article', articleId);
+    json(ctx.res, 200, { item: getAdminArticle(db, articleId) });
+    return true;
+  });
+
+  router.add('DELETE', /^\/api\/admin\/articles\/(\d+)$/, async (ctx, rawArticleId) => {
+    requireUser(ctx, contentRoles);
+    const articleId = positiveInteger(rawArticleId);
+    const result = db.prepare(`
+      UPDATE articles SET status = 'Archived', published = 0,
+        version = version + 1, updated_at = CURRENT_TIMESTAMP
+      WHERE article_id = ?
+    `).run(articleId);
+    if (!result.changes) throw new HttpError(404, 'Không tìm thấy bài viết.');
+    audit(db, ctx, 'ARCHIVE_ARTICLE', 'article', articleId);
+    json(ctx.res, 200, { item: getAdminArticle(db, articleId) });
+    return true;
+  });
+
   router.add('GET', /^\/api\/admin\/orders$/, async (ctx) => {
     requireUser(ctx, operationsRoles);
     const rows = db.prepare(`
@@ -1222,7 +1581,7 @@ function registerAdminRoutes(router, db, roles) {
   });
 
   router.add('PATCH', /^\/api\/admin\/orders\/(\d+)$/, async (ctx, rawOrderId) => {
-    const actor = requireUser(ctx, warehouseRoles);
+    const actor = requireUser(ctx, operationsRoles);
     const orderId = positiveInteger(rawOrderId);
     const body = await readBody(ctx.req);
     const status = cleanText(body.status, 30);
@@ -1283,12 +1642,14 @@ function registerAdminRoutes(router, db, roles) {
   });
 
   router.add('GET', /^\/api\/admin\/reviews$/, async (ctx) => {
-    requireUser(ctx, ['staff', 'editor', 'admin']);
+    requireUser(ctx, supportRoles);
     const items = db.prepare(`
-      SELECT r.*, u.full_name, u.email, p.name AS product_name
+      SELECT r.*, u.full_name, u.email, p.name AS product_name, o.order_number
       FROM reviews r
       JOIN users u ON u.user_id = r.user_id
       JOIN products p ON p.product_id = r.product_id
+      LEFT JOIN order_items oi ON oi.order_item_id = r.order_item_id
+      LEFT JOIN orders o ON o.order_id = oi.order_id
       ORDER BY CASE r.status WHEN 'Pending' THEN 0 ELSE 1 END, r.created_at DESC
     `).all();
     json(ctx.res, 200, { items });
@@ -1296,7 +1657,7 @@ function registerAdminRoutes(router, db, roles) {
   });
 
   router.add('PATCH', /^\/api\/admin\/reviews\/(\d+)$/, async (ctx, rawReviewId) => {
-    const user = requireUser(ctx, ['staff', 'editor', 'admin']);
+    const user = requireUser(ctx, supportRoles);
     const reviewId = positiveInteger(rawReviewId);
     const body = await readBody(ctx.req);
     const status = cleanText(body.status, 20);
@@ -1316,10 +1677,60 @@ function registerAdminRoutes(router, db, roles) {
   router.add('GET', /^\/api\/admin\/users$/, async (ctx) => {
     requireUser(ctx, adminRoles);
     const items = db.prepare(`
-      SELECT user_id, email, full_name, phone_number, address, role, is_locked, created_at
+      SELECT user_id, email, full_name, phone_number, address, role, is_locked,
+        must_change_password, created_at
       FROM users ORDER BY created_at DESC, user_id DESC
     `).all();
-    json(ctx.res, 200, { items: items.map((item) => ({ ...item, is_locked: Boolean(item.is_locked) })) });
+    json(ctx.res, 200, {
+      items: items.map((item) => ({
+        ...item,
+        is_locked: Boolean(item.is_locked),
+        must_change_password: Boolean(item.must_change_password),
+      })),
+    });
+    return true;
+  });
+
+  router.add('POST', /^\/api\/admin\/users$/, async (ctx) => {
+    const actor = requireUser(ctx, adminRoles);
+    const body = await readBody(ctx.req);
+    const email = normalizeEmail(body.email);
+    const fullName = cleanText(body.full_name, 120);
+    const role = cleanText(body.role, 20);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'Email không hợp lệ.');
+    if (fullName.length < 2) throw new HttpError(400, 'Vui lòng nhập họ tên.');
+    if (!['customer', 'staff', 'editor'].includes(role)) {
+      throw new HttpError(400, 'Admin chỉ được tạo tài khoản cấp dưới: Customer, Staff hoặc Editor.');
+    }
+    const suppliedPassword = String(body.temporary_password || body.password || '');
+    const temporaryPassword = suppliedPassword || `Flw-${crypto.randomBytes(9).toString('base64url')}9a`;
+    if (!isStrongPassword(temporaryPassword)) {
+      throw new HttpError(400, 'Mật khẩu tạm phải có ít nhất 8 ký tự, gồm chữ và số.');
+    }
+    try {
+      const result = db.prepare(`
+        INSERT INTO users
+          (email, password_hash, full_name, phone_number, address, role, must_change_password)
+        VALUES (?, ?, ?, ?, ?, ?, 1)
+      `).run(
+        email,
+        hashPassword(temporaryPassword),
+        fullName,
+        normalizePhone(body.phone_number),
+        cleanText(body.address, 500),
+        role,
+      );
+      const userId = Number(result.lastInsertRowid);
+      audit(db, ctx, 'CREATE_SUBORDINATE_ACCOUNT', 'user', userId, { role, created_by: actor.user_id });
+      json(ctx.res, 201, {
+        user: publicUser(db.prepare('SELECT * FROM users WHERE user_id = ?').get(userId)),
+        temporary_password: suppliedPassword ? null : temporaryPassword,
+        message: 'Mật khẩu tạm chỉ được trả về trong phản hồi này và không được ghi vào audit log.',
+      });
+    } catch (error) {
+      if (isUniqueViolation(error)) throw new HttpError(409, 'Email đã được sử dụng.');
+      throw error;
+    }
     return true;
   });
 
@@ -1332,9 +1743,14 @@ function registerAdminRoutes(router, db, roles) {
     }
     const target = db.prepare('SELECT * FROM users WHERE user_id = ?').get(userId);
     if (!target) throw new HttpError(404, 'Không tìm thấy người dùng.');
-    const role = body.role && ['customer', 'staff', 'editor', 'warehouse', 'admin'].includes(body.role)
-      ? body.role
-      : target.role;
+    if (userId === actor.user_id && body.role && body.role !== actor.role) {
+      throw new HttpError(409, 'Bạn không thể tự thay đổi vai trò quản trị của mình.');
+    }
+    const role = target.role === 'admin'
+      ? 'admin'
+      : body.role && ['customer', 'staff', 'editor'].includes(body.role)
+        ? body.role
+        : target.role;
     const locked = body.is_locked === undefined ? target.is_locked : (body.is_locked ? 1 : 0);
     db.prepare(`
       UPDATE users SET role = ?, is_locked = ?, updated_at = CURRENT_TIMESTAMP
@@ -1421,6 +1837,56 @@ function validateProduct(body) {
     active: body.active === false || body.active === 0 ? 0 : 1,
     editorial_review: cleanText(body.editorial_review, 1500),
   };
+}
+
+function validateArticle(body, existing = {}) {
+  const title = cleanText(body.title ?? existing.title, 220);
+  const slug = slugify(body.slug ?? existing.slug ?? title);
+  const summary = cleanText(body.summary ?? existing.summary, 600);
+  const content = sanitizeRichText(body.content ?? existing.content);
+  const requestedStatus = cleanText(body.status ?? existing.status ?? 'Draft', 20);
+  const status = ['Draft', 'InReview', 'Archived'].includes(requestedStatus)
+    ? requestedStatus
+    : existing.status === 'Published' ? 'Published' : 'Draft';
+  if (title.length < 4 || !slug) throw new HttpError(400, 'Tiêu đề bài viết không hợp lệ.');
+  if (summary.length < 10) throw new HttpError(400, 'Tóm tắt cần ít nhất 10 ký tự.');
+  if (content.replace(/<[^>]+>/g, '').length < 20) {
+    throw new HttpError(400, 'Nội dung bài viết cần ít nhất 20 ký tự.');
+  }
+  const productIds = [...new Set((Array.isArray(body.product_ids) ? body.product_ids : [])
+    .map((value) => positiveInteger(value))
+    .filter(Boolean))].slice(0, 50);
+  return { title, slug, summary, content, status, productIds };
+}
+
+function syncArticleProducts(db, articleId, productIds) {
+  db.prepare('DELETE FROM article_product_links WHERE article_id = ?').run(articleId);
+  const insert = db.prepare(`
+    INSERT INTO article_product_links (article_id, product_id, display_order)
+    VALUES (?, ?, ?)
+  `);
+  productIds.forEach((productId, index) => {
+    const exists = db.prepare('SELECT product_id FROM products WHERE product_id = ?').get(productId);
+    if (exists) insert.run(articleId, productId, index);
+  });
+}
+
+function getAdminArticle(db, articleId) {
+  const article = db.prepare(`
+    SELECT a.*, u.full_name AS author_name
+    FROM articles a LEFT JOIN users u ON u.user_id = a.author_id
+    WHERE a.article_id = ?
+  `).get(articleId);
+  if (!article) return null;
+  article.product_ids = db.prepare(`
+    SELECT product_id FROM article_product_links
+    WHERE article_id = ? ORDER BY display_order, product_id
+  `).all(articleId).map((row) => row.product_id);
+  article.media = db.prepare(`
+    SELECT media_id, file_name, mime_type, checksum, created_at
+    FROM media_assets WHERE article_id = ? ORDER BY media_id
+  `).all(articleId);
+  return article;
 }
 
 function getAdminCategory(db, categoryId) {
@@ -1533,7 +1999,12 @@ function createApplication(options = {}) {
     || path.join(__dirname, 'data', 'flowery.db');
   const secretPath = path.join(__dirname, 'data', 'app.secret');
   const secret = options.secret || generateSecret(secretPath);
+  const mysqlMode = String(process.env.DB_CLIENT || '').toLowerCase() === 'mysql'
+    && databasePath !== ':memory:';
   const partnerApiKey = options.partnerApiKey || process.env.PARTNER_API_KEY || 'demo-partner-key';
+  if (mysqlMode && (partnerApiKey.length < 24 || /^(?:demo-|replace-with-)/i.test(partnerApiKey))) {
+    throw new Error('PARTNER_API_KEY phải là khóa ngẫu nhiên dài ít nhất 24 ký tự khi dùng MySQL.');
+  }
   const staticDir = options.staticDir || path.join(root, 'client', 'dist');
   const db = openDatabase(databasePath);
   const router = createRouter();
@@ -1657,4 +2128,3 @@ if (require.main === module) {
 }
 
 module.exports = { createApplication, startServer };
-

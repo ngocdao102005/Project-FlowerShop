@@ -19,4 +19,3 @@ $process = Start-Process -FilePath $server `
   -ArgumentList "--defaults-file=$ConfigFile", '--console' `
   -WindowStyle Hidden -PassThru
 Write-Host "MySQL Flowery đã khởi động (PID $($process.Id))."
-

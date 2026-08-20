@@ -7,14 +7,17 @@ const statements = [
     phone_number VARCHAR(30) NOT NULL DEFAULT '',
     address VARCHAR(500) NOT NULL DEFAULT '',
     default_message VARCHAR(500) NOT NULL DEFAULT '',
+    avatar_url MEDIUMTEXT NOT NULL DEFAULT (''),
     role VARCHAR(20) NOT NULL DEFAULT 'customer',
     is_locked TINYINT(1) NOT NULL DEFAULT 0,
+    must_change_password TINYINT(1) NOT NULL DEFAULT 0,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id),
     UNIQUE KEY uq_users_email (email),
-    CONSTRAINT chk_users_role CHECK (role IN ('customer', 'staff', 'editor', 'warehouse', 'admin')),
-    CONSTRAINT chk_users_locked CHECK (is_locked IN (0, 1))
+    CONSTRAINT chk_users_role CHECK (role IN ('customer', 'staff', 'editor', 'admin')),
+    CONSTRAINT chk_users_locked CHECK (is_locked IN (0, 1)),
+    CONSTRAINT chk_users_change_password CHECK (must_change_password IN (0, 1))
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`,
 
   `CREATE TABLE IF NOT EXISTS categories (
@@ -149,6 +152,7 @@ const statements = [
   `CREATE TABLE IF NOT EXISTS reviews (
     review_id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     user_id INT UNSIGNED NOT NULL,
+    order_item_id INT UNSIGNED NOT NULL,
     product_id INT UNSIGNED NOT NULL,
     rating TINYINT UNSIGNED NOT NULL,
     comment TEXT NOT NULL,
@@ -157,8 +161,9 @@ const statements = [
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (review_id),
-    UNIQUE KEY uq_reviews_user_product (user_id, product_id),
+    UNIQUE KEY uq_reviews_order_item (order_item_id),
     CONSTRAINT fk_reviews_user FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    CONSTRAINT fk_reviews_order_item FOREIGN KEY (order_item_id) REFERENCES order_items(order_item_id) ON DELETE CASCADE,
     CONSTRAINT fk_reviews_product FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE,
     CONSTRAINT fk_reviews_moderator FOREIGN KEY (moderated_by) REFERENCES users(user_id),
     CONSTRAINT chk_reviews_rating CHECK (rating BETWEEN 1 AND 5),
@@ -188,15 +193,48 @@ const statements = [
 
   `CREATE TABLE IF NOT EXISTS articles (
     article_id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    author_id INT UNSIGNED NULL,
     title VARCHAR(240) NOT NULL,
     slug VARCHAR(260) NOT NULL,
     summary TEXT NOT NULL,
     content LONGTEXT NOT NULL,
-    published TINYINT(1) NOT NULL DEFAULT 1,
+    status VARCHAR(20) NOT NULL DEFAULT 'Draft',
+    published TINYINT(1) NOT NULL DEFAULT 0,
+    source_filename VARCHAR(500) NOT NULL DEFAULT '',
+    version INT UNSIGNED NOT NULL DEFAULT 1,
+    published_at VARCHAR(30) NOT NULL DEFAULT '',
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (article_id),
     UNIQUE KEY uq_articles_slug (slug),
+    CONSTRAINT fk_articles_author FOREIGN KEY (author_id) REFERENCES users(user_id) ON DELETE SET NULL,
+    CONSTRAINT chk_articles_status CHECK (status IN ('Draft', 'InReview', 'Published', 'Archived')),
     CONSTRAINT chk_articles_published CHECK (published IN (0, 1))
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`,
+
+  `CREATE TABLE IF NOT EXISTS media_assets (
+    media_id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+    article_id INT UNSIGNED NULL,
+    file_name VARCHAR(500) NOT NULL,
+    mime_type VARCHAR(120) NOT NULL,
+    data_url LONGTEXT NOT NULL,
+    checksum CHAR(64) NOT NULL,
+    created_by INT UNSIGNED NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (media_id),
+    UNIQUE KEY uq_media_article_checksum (article_id, checksum),
+    CONSTRAINT fk_media_article FOREIGN KEY (article_id) REFERENCES articles(article_id) ON DELETE CASCADE,
+    CONSTRAINT fk_media_creator FOREIGN KEY (created_by) REFERENCES users(user_id) ON DELETE SET NULL
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`,
+
+  `CREATE TABLE IF NOT EXISTS article_product_links (
+    article_id INT UNSIGNED NOT NULL,
+    product_id INT UNSIGNED NOT NULL,
+    display_order INT NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (article_id, product_id),
+    CONSTRAINT fk_article_links_article FOREIGN KEY (article_id) REFERENCES articles(article_id) ON DELETE CASCADE,
+    CONSTRAINT fk_article_links_product FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`,
 
   `CREATE TABLE IF NOT EXISTS audit_logs (
@@ -243,5 +281,22 @@ const statements = [
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`,
 ];
 
-module.exports = { statements };
+const columnMigrations = [
+  ['users', 'avatar_url', `MEDIUMTEXT NOT NULL`],
+  ['users', 'must_change_password', `TINYINT(1) NOT NULL DEFAULT 0`],
+  ['reviews', 'order_item_id', `INT UNSIGNED NULL`],
+  ['articles', 'author_id', `INT UNSIGNED NULL`],
+  ['articles', 'status', `VARCHAR(20) NOT NULL DEFAULT 'Published'`],
+  ['articles', 'source_filename', `VARCHAR(500) NOT NULL DEFAULT ''`],
+  ['articles', 'version', `INT UNSIGNED NOT NULL DEFAULT 1`],
+  ['articles', 'published_at', `VARCHAR(30) NOT NULL DEFAULT ''`],
+  ['articles', 'updated_at', `DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`],
+];
 
+const migrationStatements = [
+  `UPDATE users SET role = 'staff' WHERE role = 'warehouse'`,
+  `UPDATE articles SET status = IF(published = 1, 'Published', 'Draft'),
+     published_at = IF(published = 1 AND published_at = '', DATE_FORMAT(created_at, '%Y-%m-%dT%H:%i:%s'), published_at)`,
+];
+
+module.exports = { columnMigrations, migrationStatements, statements };

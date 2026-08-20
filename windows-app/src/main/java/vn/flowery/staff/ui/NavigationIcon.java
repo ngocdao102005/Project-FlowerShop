@@ -16,6 +16,7 @@ public final class NavigationIcon implements Icon {
         REFUNDS,
         PRODUCTS,
         CATEGORIES,
+        ARTICLES,
         LOGOUT
     }
 
@@ -60,6 +61,7 @@ public final class NavigationIcon implements Icon {
                 case REFUNDS -> paintRefunds(drawing, x, y);
                 case PRODUCTS -> paintFlower(drawing, x, y);
                 case CATEGORIES -> paintCategories(drawing, x, y);
+                case ARTICLES -> paintArticles(drawing, x, y);
                 case LOGOUT -> paintLogout(drawing, x, y);
             }
         } finally {
@@ -116,6 +118,13 @@ public final class NavigationIcon implements Icon {
         drawing.drawLine(x + 1, y + 3, x + 7, y + 3);
         drawing.drawLine(x + 7, y + 3, x + 9, y + 6);
         drawing.drawLine(x + 9, y + 6, x + 16, y + 6);
+    }
+
+    private static void paintArticles(Graphics2D drawing, int x, int y) {
+        drawing.drawRoundRect(x + 2, y + 1, 15, 17, 2, 2);
+        drawing.drawLine(x + 5, y + 5, x + 14, y + 5);
+        drawing.drawLine(x + 5, y + 9, x + 14, y + 9);
+        drawing.drawLine(x + 5, y + 13, x + 11, y + 13);
     }
 
     private static void paintLogout(Graphics2D drawing, int x, int y) {

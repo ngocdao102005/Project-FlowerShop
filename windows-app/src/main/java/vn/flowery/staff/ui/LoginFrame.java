@@ -108,7 +108,7 @@ public final class LoginFrame extends JFrame {
         title.setForeground(Theme.TEXT);
         addRow(form, title, constraints, 0, new Insets(0, 0, 8, 0));
 
-        JLabel help = new JLabel("Sử dụng tài khoản staff, warehouse, editor hoặc admin.");
+        JLabel help = new JLabel("Sử dụng tài khoản staff, editor hoặc admin.");
         help.setForeground(Theme.MUTED);
         addRow(form, help, constraints, 1, new Insets(0, 0, 28, 0));
 
@@ -118,7 +118,6 @@ public final class LoginFrame extends JFrame {
         addRow(form, emailField, constraints, 3, new Insets(0, 0, 18, 0));
 
         addRow(form, fieldLabel("Mật khẩu"), constraints, 4, new Insets(0, 0, 7, 0));
-        passwordField.setText("Admin@123");
         passwordField.setBorder(Theme.compoundBorder());
         addRow(form, passwordField, constraints, 5, new Insets(0, 0, 12, 0));
 

@@ -11,4 +11,3 @@ public final class AllTests {
         System.out.println("Windows App tests: PASSED");
     }
 }
-

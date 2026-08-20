@@ -93,6 +93,97 @@ test('registration validates passwords and stores authenticated profile', async 
   assert.equal(me.payload.user.full_name, 'Khách Mới');
 });
 
+test('admin provisions lower roles and editor manages versioned articles', async () => {
+  const admin = await login('admin@flowery.vn', 'Admin@123');
+  const editorCreated = await call('/admin/users', {
+    method: 'POST',
+    token: admin.token,
+    body: { email: 'article-editor@example.com', full_name: 'Biên tập Bài viết', role: 'editor' },
+  });
+  assert.equal(editorCreated.response.status, 201);
+  assert.ok(editorCreated.payload.temporary_password);
+  assert.equal(editorCreated.payload.user.must_change_password, true);
+
+  const editor = await login('article-editor@example.com', editorCreated.payload.temporary_password);
+  const staffCreated = await call('/admin/users', {
+    method: 'POST',
+    token: admin.token,
+    body: {
+      email: 'article-staff@example.com',
+      full_name: 'Nhân viên Catalog',
+      role: 'staff',
+      password: 'StaffPass123',
+    },
+  });
+  assert.equal(staffCreated.response.status, 201);
+  assert.equal(staffCreated.payload.temporary_password, null);
+  const staff = await login('article-staff@example.com', 'StaffPass123');
+
+  const staffDenied = await call('/admin/articles', { token: staff.token });
+  assert.equal(staffDenied.response.status, 403);
+
+  const created = await call('/admin/articles', {
+    method: 'POST',
+    token: editor.token,
+    body: {
+      title: 'Cách chăm hoa hồng sau khi nhận',
+      summary: 'Các bước đơn giản giúp bó hoa hồng tươi lâu hơn trong điều kiện gia đình.',
+      content: 'Cắt chéo gốc hoa, thay nước sạch mỗi ngày và đặt bình ở nơi thoáng mát.',
+      status: 'InReview',
+      product_ids: [1],
+    },
+  });
+  assert.equal(created.response.status, 201);
+  assert.equal(created.payload.item.status, 'InReview');
+  assert.deepEqual(created.payload.item.product_ids, [1]);
+
+  const published = await call(`/admin/articles/${created.payload.item.article_id}/publish`, {
+    method: 'POST',
+    token: editor.token,
+    body: {},
+  });
+  assert.equal(published.response.status, 200);
+  assert.equal(published.payload.item.status, 'Published');
+  assert.equal(published.payload.item.version, 2);
+
+  const publicArticles = await call('/articles');
+  assert.ok(publicArticles.payload.items.some((item) => item.article_id === created.payload.item.article_id));
+});
+
+test('profile avatar validation and password rotation clear the temporary-password flag', async () => {
+  const admin = await login('admin@flowery.vn', 'Admin@123');
+  const created = await call('/admin/users', {
+    method: 'POST',
+    token: admin.token,
+    body: {
+      email: 'profile-user@example.com',
+      full_name: 'Khách Hồ Sơ',
+      role: 'customer',
+      password: 'Initial123',
+    },
+  });
+  assert.equal(created.response.status, 201);
+  const session = await login('profile-user@example.com', 'Initial123');
+  const avatar = 'data:image/png;base64,' + Buffer.from('small-avatar').toString('base64');
+  const updated = await call('/me', {
+    method: 'PATCH',
+    token: session.token,
+    body: { phone_number: '0901234567', address: '12 Đường Hoa, Quận 1', avatar_url: avatar },
+  });
+  assert.equal(updated.response.status, 200);
+  assert.equal(updated.payload.user.avatar_url, avatar);
+
+  const rotated = await call('/me/password', {
+    method: 'PATCH',
+    token: session.token,
+    body: { current_password: 'Initial123', new_password: 'Rotated123' },
+  });
+  assert.equal(rotated.response.status, 200);
+  assert.equal(rotated.payload.user.must_change_password, false);
+  const relogin = await login('profile-user@example.com', 'Rotated123');
+  assert.equal(relogin.user.email, 'profile-user@example.com');
+});
+
 test('checkout recalculates price, enforces idempotency, and restores stock on cancellation', async () => {
   const session = await login('new@example.com', 'Strong123');
   const catalog = await call('/products?limit=1');
@@ -321,12 +412,12 @@ test('partner catalog is protected and exports valid XML', async () => {
   assert.match(authorized.payload, /<product id="1">/);
 });
 
-test('warehouse, carrier and refund workflows enforce the documented state transitions', async () => {
+test('staff, editor, carrier and refund workflows enforce RBAC and state transitions', async () => {
   const admin = await login('admin@flowery.vn', 'Admin@123');
   const identities = [
     ['workflow-customer@example.com', 'Khách Workflow', 'customer'],
-    ['workflow-warehouse@example.com', 'Kho Workflow', 'warehouse'],
     ['workflow-support@example.com', 'CSKH Workflow', 'staff'],
+    ['workflow-editor@example.com', 'Biên tập Workflow', 'editor'],
   ];
 
   const users = {};
@@ -348,8 +439,8 @@ test('warehouse, carrier and refund workflows enforce the documented state trans
   }
 
   const customer = await login('workflow-customer@example.com', 'Strong123');
-  const warehouse = await login('workflow-warehouse@example.com', 'Strong123');
   const support = await login('workflow-support@example.com', 'Strong123');
+  const editor = await login('workflow-editor@example.com', 'Strong123');
   const catalog = await call('/products?limit=1');
   const product = catalog.payload.items[0];
   const checkout = await call('/orders', {
@@ -368,23 +459,23 @@ test('warehouse, carrier and refund workflows enforce the documented state trans
   assert.equal(checkout.response.status, 201);
   const orderId = checkout.payload.order.order_id;
 
-  const staffCannotOperateWarehouse = await call(`/admin/orders/${orderId}`, {
+  const editorCannotOperateOrders = await call(`/admin/orders/${orderId}`, {
     method: 'PATCH',
-    token: support.token,
+    token: editor.token,
     body: { status: 'Preparing' },
   });
-  assert.equal(staffCannotOperateWarehouse.response.status, 403);
+  assert.equal(editorCannotOperateOrders.response.status, 403);
 
   const invalidJump = await call(`/admin/orders/${orderId}`, {
     method: 'PATCH',
-    token: warehouse.token,
+    token: support.token,
     body: { status: 'Delivered' },
   });
   assert.equal(invalidJump.response.status, 409);
 
   const preparing = await call(`/admin/orders/${orderId}`, {
     method: 'PATCH',
-    token: warehouse.token,
+    token: support.token,
     body: { status: 'Preparing' },
   });
   assert.equal(preparing.response.status, 200);
@@ -392,14 +483,14 @@ test('warehouse, carrier and refund workflows enforce the documented state trans
 
   const missingTracking = await call(`/admin/orders/${orderId}`, {
     method: 'PATCH',
-    token: warehouse.token,
+    token: support.token,
     body: { status: 'Shipping' },
   });
   assert.equal(missingTracking.response.status, 400);
 
   const shipping = await call(`/admin/orders/${orderId}`, {
     method: 'PATCH',
-    token: warehouse.token,
+    token: support.token,
     body: { status: 'Shipping', carrier: 'Flowery Express', tracking_code: 'FLW-TEST-001' },
   });
   assert.equal(shipping.response.status, 200);

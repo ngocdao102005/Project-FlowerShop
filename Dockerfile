@@ -15,4 +15,3 @@ COPY --from=client-build /app/client/dist ./client/dist
 RUN mkdir -p /app/server/data
 EXPOSE 5000
 CMD ["node", "server/server.js"]
-

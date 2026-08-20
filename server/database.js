@@ -1,14 +1,14 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
-const { hashPassword } = require('./security');
+const { hashPassword, isStrongPassword } = require('./security');
 const { openMysqlDatabase } = require('./mysql-database');
 
 function openDatabase(databasePath, options = {}) {
   const client = String(options.client || process.env.DB_CLIENT || 'sqlite').toLowerCase();
   if (client === 'mysql' && databasePath !== ':memory:') {
     const db = openMysqlDatabase(options.mysql);
-    seed(db);
+    seed(db, { requireBootstrapAdmin: true });
     return db;
   }
   if (databasePath !== ':memory:') {
@@ -32,9 +32,11 @@ function migrate(db) {
       phone_number TEXT NOT NULL DEFAULT '',
       address TEXT NOT NULL DEFAULT '',
       default_message TEXT NOT NULL DEFAULT '',
+      avatar_url TEXT NOT NULL DEFAULT '',
       role TEXT NOT NULL DEFAULT 'customer'
-        CHECK (role IN ('customer', 'staff', 'editor', 'warehouse', 'admin')),
+        CHECK (role IN ('customer', 'staff', 'editor', 'admin')),
       is_locked INTEGER NOT NULL DEFAULT 0 CHECK (is_locked IN (0, 1)),
+      must_change_password INTEGER NOT NULL DEFAULT 0 CHECK (must_change_password IN (0, 1)),
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
@@ -143,6 +145,7 @@ function migrate(db) {
     CREATE TABLE IF NOT EXISTS reviews (
       review_id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+      order_item_id INTEGER NOT NULL UNIQUE REFERENCES order_items(order_item_id) ON DELETE CASCADE,
       product_id INTEGER NOT NULL REFERENCES products(product_id) ON DELETE CASCADE,
       rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
       comment TEXT NOT NULL,
@@ -150,8 +153,7 @@ function migrate(db) {
         CHECK (status IN ('Pending', 'Approved', 'Rejected')),
       moderated_by INTEGER REFERENCES users(user_id),
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(user_id, product_id)
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS refund_requests (
@@ -170,12 +172,39 @@ function migrate(db) {
 
     CREATE TABLE IF NOT EXISTS articles (
       article_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      author_id INTEGER REFERENCES users(user_id) ON DELETE SET NULL,
       title TEXT NOT NULL,
       slug TEXT NOT NULL UNIQUE,
       summary TEXT NOT NULL,
       content TEXT NOT NULL,
-      published INTEGER NOT NULL DEFAULT 1 CHECK (published IN (0, 1)),
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      status TEXT NOT NULL DEFAULT 'Draft'
+        CHECK (status IN ('Draft', 'InReview', 'Published', 'Archived')),
+      published INTEGER NOT NULL DEFAULT 0 CHECK (published IN (0, 1)),
+      source_filename TEXT NOT NULL DEFAULT '',
+      version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+      published_at TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS media_assets (
+      media_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      article_id INTEGER REFERENCES articles(article_id) ON DELETE CASCADE,
+      file_name TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      data_url TEXT NOT NULL,
+      checksum TEXT NOT NULL,
+      created_by INTEGER REFERENCES users(user_id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(article_id, checksum)
+    );
+
+    CREATE TABLE IF NOT EXISTS article_product_links (
+      article_id INTEGER NOT NULL REFERENCES articles(article_id) ON DELETE CASCADE,
+      product_id INTEGER NOT NULL REFERENCES products(product_id) ON DELETE CASCADE,
+      display_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (article_id, product_id)
     );
 
     CREATE TABLE IF NOT EXISTS audit_logs (
@@ -216,6 +245,24 @@ function migrate(db) {
   ensureColumn(db, 'refund_requests', 'gateway_reference', "TEXT NOT NULL DEFAULT ''");
   ensureColumn(db, 'shipments', 'handed_over_at', "TEXT NOT NULL DEFAULT ''");
   ensureColumn(db, 'shipments', 'delivered_at', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'users', 'avatar_url', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'users', 'must_change_password', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'reviews', 'order_item_id', 'INTEGER REFERENCES order_items(order_item_id) ON DELETE CASCADE');
+  ensureColumn(db, 'articles', 'author_id', 'INTEGER REFERENCES users(user_id) ON DELETE SET NULL');
+  ensureColumn(db, 'articles', 'status', "TEXT NOT NULL DEFAULT 'Published'");
+  ensureColumn(db, 'articles', 'source_filename', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'articles', 'version', 'INTEGER NOT NULL DEFAULT 1');
+  ensureColumn(db, 'articles', 'published_at', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, 'articles', 'updated_at', "TEXT NOT NULL DEFAULT ''");
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_reviews_order_item
+      ON reviews(order_item_id) WHERE order_item_id IS NOT NULL;
+    UPDATE users SET role = 'staff' WHERE role = 'warehouse';
+    UPDATE articles
+      SET status = CASE WHEN published = 1 THEN 'Published' ELSE 'Draft' END,
+          published_at = CASE WHEN published = 1 AND published_at = '' THEN created_at ELSE published_at END,
+          updated_at = CASE WHEN updated_at = '' THEN created_at ELSE updated_at END;
+  `);
 }
 
 function ensureColumn(db, table, column, definition) {
@@ -224,7 +271,7 @@ function ensureColumn(db, table, column, definition) {
   if (!exists) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
-function seed(db) {
+function seed(db, options = {}) {
   const userCount = db.prepare('SELECT COUNT(*) AS count FROM users').get().count;
   if (userCount === 0) {
     const insertUser = db.prepare(`
@@ -232,24 +279,31 @@ function seed(db) {
         (email, password_hash, full_name, phone_number, address, default_message, role)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
-    insertUser.run(
-      'admin@flowery.vn',
-      hashPassword('Admin@123'),
-      'Quản trị Flowery',
-      '0900000001',
-      '25 Nguyễn Huệ, Quận 1, TP.HCM',
-      '',
-      'admin',
-    );
-    insertUser.run(
-      'lan@flowery.vn',
-      hashPassword('Customer@123'),
-      'Nguyễn Ngọc Lan',
-      '0900000002',
-      '18 Lê Lợi, Quận 1, TP.HCM',
-      'Chúc bạn luôn rạng rỡ như những đóa hoa.',
-      'customer',
-    );
+    if (options.requireBootstrapAdmin) {
+      const email = String(process.env.BOOTSTRAP_ADMIN_EMAIL || '').trim().toLowerCase();
+      const password = String(process.env.BOOTSTRAP_ADMIN_PASSWORD || '');
+      const fullName = String(process.env.BOOTSTRAP_ADMIN_NAME || 'Quản trị Flowery').trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+          || /^replace-with-/i.test(email)
+          || !isStrongPassword(password)
+          || /^replace-with-/i.test(password)) {
+        throw new Error(
+          'Database chưa có tài khoản. Hãy đặt BOOTSTRAP_ADMIN_EMAIL và '
+            + 'BOOTSTRAP_ADMIN_PASSWORD mạnh trong .env rồi khởi động lại.',
+        );
+      }
+      insertUser.run(email, hashPassword(password), fullName || 'Quản trị Flowery', '', '', '', 'admin');
+    } else {
+      insertUser.run(
+        'admin@flowery.vn', hashPassword('Admin@123'), 'Quản trị Flowery',
+        '0900000001', '25 Nguyễn Huệ, Quận 1, TP.HCM', '', 'admin',
+      );
+      insertUser.run(
+        'lan@flowery.vn', hashPassword('Customer@123'), 'Nguyễn Ngọc Lan',
+        '0900000002', '18 Lê Lợi, Quận 1, TP.HCM',
+        'Chúc bạn luôn rạng rỡ như những đóa hoa.', 'customer',
+      );
+    }
   }
 
   const categoryCount = db.prepare('SELECT COUNT(*) AS count FROM categories').get().count;
@@ -311,8 +365,9 @@ function seed(db) {
   const articleCount = db.prepare('SELECT COUNT(*) AS count FROM articles').get().count;
   if (articleCount === 0) {
     const insert = db.prepare(`
-      INSERT INTO articles (title, slug, summary, content)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO articles
+        (title, slug, summary, content, status, published, published_at, updated_at)
+      VALUES (?, ?, ?, ?, 'Published', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `);
     insert.run(
       'Chọn hoa sinh nhật theo tính cách',
@@ -329,7 +384,7 @@ function seed(db) {
   }
 
   const orderCount = db.prepare('SELECT COUNT(*) AS count FROM orders').get().count;
-  if (orderCount === 0) seedDeliveredOrder(db);
+  if (orderCount === 0 && !options.requireBootstrapAdmin) seedDeliveredOrder(db);
 }
 
 function seedDeliveredOrder(db) {
@@ -367,4 +422,3 @@ function seedDeliveredOrder(db) {
 }
 
 module.exports = { openDatabase };
-

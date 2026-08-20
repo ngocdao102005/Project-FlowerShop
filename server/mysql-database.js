@@ -4,7 +4,7 @@ const {
   Worker,
   receiveMessageOnPort,
 } = require('node:worker_threads');
-const { statements } = require('./mysql-schema');
+const { columnMigrations, migrationStatements, statements } = require('./mysql-schema');
 
 class MysqlDatabaseSync {
   constructor(config) {
@@ -63,15 +63,42 @@ function readConfig(overrides = {}) {
     host: overrides.host || process.env.MYSQL_HOST || '127.0.0.1',
     port: Number(overrides.port || process.env.MYSQL_PORT || 3306),
     database: overrides.database || process.env.MYSQL_DATABASE || 'flowery',
-    user: overrides.user || process.env.MYSQL_USER || 'flowery_app',
+    user: overrides.user || process.env.MYSQL_USER || '',
     password: overrides.password || process.env.MYSQL_PASSWORD || '',
     ssl: overrides.ssl ?? String(process.env.MYSQL_SSL || 'false').toLowerCase() === 'true',
   };
 }
 
 function openMysqlDatabase(overrides = {}) {
-  const db = new MysqlDatabaseSync(readConfig(overrides));
+  try {
+    require.resolve('mysql2/promise');
+  } catch {
+    throw new Error('Thiếu thư viện mysql2. Hãy chạy "npm ci" trong thư mục dự án rồi thử lại.');
+  }
+  const config = readConfig(overrides);
+  if (!config.user || /^replace-with-/i.test(config.user)) {
+    throw new Error('MYSQL_USER chưa được cấu hình trong tệp .env.');
+  }
+  if (!config.password || /^replace-with-/i.test(config.password)) {
+    throw new Error('MYSQL_PASSWORD chưa được cấu hình trong tệp .env.');
+  }
+  const db = new MysqlDatabaseSync(config);
   for (const statement of statements) db.exec(statement);
+  for (const [table, column, definition] of columnMigrations) {
+    const exists = db.prepare(`
+      SELECT 1 AS present FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?
+      LIMIT 1
+    `).get(table, column);
+    if (!exists) db.exec(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${definition}`);
+  }
+  const reviewIndex = db.prepare(`
+    SELECT 1 AS present FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'reviews'
+      AND INDEX_NAME = 'uq_reviews_order_item' LIMIT 1
+  `).get();
+  if (!reviewIndex) db.exec('CREATE UNIQUE INDEX uq_reviews_order_item ON reviews(order_item_id)');
+  for (const statement of migrationStatements) db.exec(statement);
   return db;
 }
 

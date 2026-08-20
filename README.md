@@ -6,6 +6,22 @@ API Node.js, cơ sở dữ liệu MySQL 8.4 LTS và Windows App Java cho nhân v
 
 Sơ đồ kiến trúc tham chiếu được lưu tại `docs/architecture.png`.
 
+## Cập nhật 1.6.0
+
+- Chuẩn hóa mô hình vai trò theo tài liệu hướng đối tượng: `Customer`, `Staff`,
+  `Editor`, `Admin`; hợp nhất trách nhiệm kho/CSKH vào `Staff` và loại vai trò
+  `warehouse` khỏi luồng cấp quyền mới.
+- Mở cổng vận hành theo đúng vai trò: Staff quản lý catalog, đơn hàng, đánh giá và
+  hoàn tiền; Editor quản lý cẩm nang; Admin quản lý toàn bộ và cấp tài khoản cấp dưới.
+- Bổ sung vòng đời bài viết `Draft → InReview → Published → Archived`, quản lý phiên
+  bản, liên kết sản phẩm và nhập nội dung/ảnh từ DOCX.
+- Gắn đánh giá vào từng `OrderItem` đã giao để một lần mua chỉ tạo một đánh giá,
+  đồng thời giữ endpoint cũ ở chế độ tương thích.
+- Nâng cấp hồ sơ với ảnh đại diện được thu nhỏ tại trình duyệt, xác thực số điện
+  thoại/địa chỉ và đổi mật khẩu; tài khoản do Admin tạo bắt buộc đổi mật khẩu tạm.
+- Nâng cấp Windows App 1.6.0 với RBAC mới và màn hình quản lý cẩm nang bằng các
+  đối tượng Java/HTTP API, không kết nối trực tiếp MySQL.
+
 ## Cập nhật 1.5.0
 
 - Chuyển cơ sở dữ liệu vận hành mặc định từ SQLite sang MySQL Community Server
@@ -35,16 +51,17 @@ Sơ đồ kiến trúc tham chiếu được lưu tại `docs/architecture.png`.
 - Sửa hiện tượng dấu và ký tự bị tách trong các tiêu đề serif trên storefront và
   backoffice.
 
-## Windows App 1.4.0
+## Windows App 1.6.0
 
-Dự án có thêm ứng dụng desktop `windows-app/` dành cho staff, warehouse, editor và admin:
+Dự án có thêm ứng dụng desktop `windows-app/` dành cho staff, editor và admin:
 
 - Java 21, Swing và kiến trúc hướng đối tượng.
 - Đăng nhập bằng Backend API, bearer token chỉ tồn tại trong phiên ứng dụng.
-- Dashboard vận hành; nhân viên xem đơn, kho cập nhật tuần tự và nhập thông tin bàn giao.
+- Dashboard vận hành; Staff cập nhật tuần tự đơn, tồn kho và thông tin bàn giao.
 - Màn hình CSKH phê duyệt/từ chối hoàn tiền; yêu cầu đã duyệt chờ cổng thanh toán xác nhận.
 - CRUD sản phẩm hoa: thêm, xem, sửa, ngừng bán; tìm kiếm, cảnh báo sắp hết hàng và cập nhật tồn kho.
 - CRUD danh mục hoa có soft delete an toàn, kích hoạt lại và bảo vệ danh mục đang có sản phẩm.
+- Editor/Admin quản lý bản nháp, gửi duyệt, xuất bản và lưu trữ cẩm nang hoa.
 - UX/UI mới với menu đang chọn, toolbar thoáng, trạng thái trực quan và nút theo ngữ cảnh.
 - Bản vá icon vector loại bỏ ô vuông do thiếu glyph Unicode trên Windows.
 - Không truy cập trực tiếp SQLite/MySQL; toàn bộ dữ liệu đi qua HTTP/JSON.
@@ -63,16 +80,16 @@ Khởi động backend tại `http://127.0.0.1:5000`, sau đó xem hướng dẫ
 
 ## Chức năng đã triển khai
 
-- Đăng ký, đăng nhập, hồ sơ khách hàng, khóa tài khoản và phân quyền theo vai trò.
+- Đăng ký, đăng nhập, hồ sơ/ảnh đại diện, đổi mật khẩu, khóa tài khoản và RBAC.
 - Catalog, tìm kiếm, lọc theo danh mục/dịp/màu, sắp xếp và gợi ý sản phẩm liên quan.
 - Danh sách yêu thích và giỏ hàng lưu trên máy chủ cho người dùng đã đăng nhập.
 - Checkout tính lại giá ở backend, kiểm tra tồn kho trong transaction và chống tạo
   đơn lặp bằng idempotency key.
 - Thanh toán COD và adapter sandbox cho thẻ/ví; không thu hoặc lưu dữ liệu thẻ.
 - Theo dõi đơn/vận chuyển, hủy trước khi giao, hoàn tồn kho và yêu cầu hoàn tiền.
-- Đánh giá chỉ dành cho khách đã nhận hàng, có quy trình kiểm duyệt.
-- Backoffice quản lý dashboard, sản phẩm, danh mục, đơn, đánh giá, người dùng và
-  hoàn tiền.
+- Đánh giá gắn với từng dòng hàng đã nhận, có quy trình kiểm duyệt.
+- Backoffice quản lý dashboard, sản phẩm, danh mục, đơn, đánh giá, cẩm nang, người
+  dùng và hoàn tiền theo đúng vai trò.
 - Partner API JSON/XML có API key; ảnh sản phẩm mẫu được phục vụ nội bộ.
 - Request ID, rate limit, audit log, HMAC session token, scrypt password hash và
   truy vấn SQL có tham số.
@@ -107,12 +124,13 @@ npm run dev
 
 Frontend chạy ở `http://127.0.0.1:5173`, API ở `http://127.0.0.1:5000`.
 
-## Tài khoản mẫu
+## Tài khoản khởi tạo
 
-| Vai trò | Email | Mật khẩu |
-|---|---|---|
-| Khách hàng | `lan@flowery.vn` | `Customer@123` |
-| Quản trị | `admin@flowery.vn` | `Admin@123` |
+MySQL không dùng thông tin đăng nhập mặc định. Lần khởi tạo đầu tiên bắt buộc cấu
+hình `BOOTSTRAP_ADMIN_EMAIL` và `BOOTSTRAP_ADMIN_PASSWORD` trong `.env` (tệp này
+bị Git bỏ qua). Sau khi đăng nhập, Admin tạo Staff/Editor trong màn hình Người dùng;
+mật khẩu tự sinh chỉ hiển thị đúng một lần. Bộ kiểm thử SQLite sử dụng fixture nội bộ
+riêng và không được dùng làm tài khoản vận hành.
 
 Dữ liệu mẫu còn có một đơn đã giao cho tài khoản khách hàng để thử chức năng đánh
 giá và hoàn tiền.
@@ -137,6 +155,8 @@ triển khai:
 - `DB_CLIENT`: `mysql` trong vận hành; `sqlite` chỉ dành cho kiểm thử/fallback.
 - `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`: vị trí database MySQL.
 - `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_SSL`: thông tin đăng nhập và TLS MySQL.
+- `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD`: chỉ dùng khi MySQL chưa có
+  tài khoản; không được commit `.env` hoặc gửi các giá trị này vào tài liệu/log.
 - `DATABASE_PATH`: đường dẫn SQLite cũ, chỉ dùng khi di chuyển/fallback.
 - `CLIENT_ORIGIN`: origin frontend được phép gọi API trong chế độ phát triển.
 
@@ -203,4 +223,3 @@ thanh toán thật. Thẻ/ví đang dùng adapter sandbox; vận chuyển và �
 dữ liệu nội bộ. Khi triển khai thương mại, thay các adapter này bằng cổng thanh
 toán, đơn vị vận chuyển và object storage/CDN chính thức, đồng thời đặt reverse
 proxy TLS, secret manager, backup và giám sát tập trung.
-

@@ -24,7 +24,7 @@ New-Item -ItemType Directory -Path $distDirectory -Force | Out-Null
     --dest $distDirectory `
     --main-jar FloweryStaff.jar `
     --main-class vn.flowery.staff.App `
-    --app-version 1.2.1 `
+    --app-version 1.6.0 `
     --vendor 'Nguyen Ngoc Dao' `
     --description 'Flowery Windows App cho nhan vien va quan tri' `
     --java-options '-Dfile.encoding=UTF-8'
@@ -39,4 +39,3 @@ Copy-Item -LiteralPath (Join-Path $projectRoot 'config\application.properties') 
 Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination $appImageDirectory
 
 Write-Host "Packaged application: $appImageDirectory"
-

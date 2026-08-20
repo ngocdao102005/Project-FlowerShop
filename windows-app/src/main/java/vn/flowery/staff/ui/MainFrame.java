@@ -19,12 +19,14 @@ import vn.flowery.staff.api.ApiClient;
 import vn.flowery.staff.config.AppConfig;
 import vn.flowery.staff.model.User;
 import vn.flowery.staff.service.AuthService;
+import vn.flowery.staff.service.ArticleService;
 import vn.flowery.staff.service.CategoryService;
 import vn.flowery.staff.service.DashboardService;
 import vn.flowery.staff.service.OrderService;
 import vn.flowery.staff.service.ProductService;
 import vn.flowery.staff.service.RefundService;
 import vn.flowery.staff.ui.panel.CategoriesPanel;
+import vn.flowery.staff.ui.panel.ArticlesPanel;
 import vn.flowery.staff.ui.panel.DashboardPanel;
 import vn.flowery.staff.ui.panel.OrdersPanel;
 import vn.flowery.staff.ui.panel.ProductsPanel;
@@ -36,6 +38,7 @@ public final class MainFrame extends JFrame {
     private static final String PRODUCTS = "products";
     private static final String CATEGORIES = "categories";
     private static final String REFUNDS = "refunds";
+    private static final String ARTICLES = "articles";
 
     private final AppConfig config;
     private final ApiClient apiClient;
@@ -61,18 +64,11 @@ public final class MainFrame extends JFrame {
         setLocationRelativeTo(null);
 
         DashboardPanel dashboard = new DashboardPanel(new DashboardService(apiClient));
-        ProductsPanel products = new ProductsPanel(
-            new ProductService(apiClient),
-            user.canManageOrdersAndStock(),
-            user.canManageCatalog()
-        );
-        CategoriesPanel categories = new CategoriesPanel(
-            new CategoryService(apiClient),
-            user.canManageCatalog()
-        );
         content.add(dashboard, DASHBOARD);
-        content.add(products, PRODUCTS);
-        content.add(categories, CATEGORIES);
+        if (user.canManageCatalog()) {
+            content.add(new ProductsPanel(new ProductService(apiClient), true, true), PRODUCTS);
+            content.add(new CategoriesPanel(new CategoryService(apiClient), true), CATEGORIES);
+        }
 
         if (user.canViewOrders()) {
             content.add(
@@ -82,6 +78,9 @@ public final class MainFrame extends JFrame {
         }
         if (user.canHandleRefunds()) {
             content.add(new RefundsPanel(new RefundService(apiClient)), REFUNDS);
+        }
+        if (user.canManageContent()) {
+            content.add(new ArticlesPanel(new ArticleService(apiClient)), ARTICLES);
         }
 
         JPanel root = new JPanel(new BorderLayout());
@@ -109,7 +108,7 @@ public final class MainFrame extends JFrame {
         logo.setFont(new Font("Segoe UI", Font.BOLD, 25));
         logo.setAlignmentX(LEFT_ALIGNMENT);
 
-        JLabel appName = new JLabel("STAFF SYSTEM | 1.4.0");
+        JLabel appName = new JLabel("HYBRID SYSTEM | 1.6.0");
         appName.setForeground(new Color(179, 212, 197));
         appName.setFont(new Font("Segoe UI", Font.BOLD, 11));
         appName.setAlignmentX(LEFT_ALIGNMENT);
@@ -147,22 +146,16 @@ public final class MainFrame extends JFrame {
                 "Duyệt hoặc từ chối yêu cầu; cổng thanh toán xác nhận hoàn tất."
             );
         }
-        addNavigation(
-            sidebar,
-            "Sản phẩm hoa",
-            NavigationIcon.Type.PRODUCTS,
-            PRODUCTS,
-            "Sản phẩm hoa",
-            "CRUD catalog hoa, trạng thái bán và tồn kho."
-        );
-        addNavigation(
-            sidebar,
-            "Danh mục hoa",
-            NavigationIcon.Type.CATEGORIES,
-            CATEGORIES,
-            "Danh mục hoa",
-            "Tổ chức catalog và kiểm soát danh mục sử dụng."
-        );
+        if (user.canManageCatalog()) {
+            addNavigation(sidebar, "Sản phẩm hoa", NavigationIcon.Type.PRODUCTS, PRODUCTS,
+                "Sản phẩm hoa", "CRUD catalog hoa, trạng thái bán và tồn kho.");
+            addNavigation(sidebar, "Danh mục hoa", NavigationIcon.Type.CATEGORIES, CATEGORIES,
+                "Danh mục hoa", "Tổ chức catalog và kiểm soát danh mục sử dụng.");
+        }
+        if (user.canManageContent()) {
+            addNavigation(sidebar, "Cẩm nang hoa", NavigationIcon.Type.ARTICLES, ARTICLES,
+                "Cẩm nang hoa", "Biên tập, duyệt, xuất bản và lưu trữ bài viết.");
+        }
         sidebar.add(Box.createVerticalGlue());
 
         JPanel userCard = new JPanel();

@@ -10,6 +10,7 @@ import {
   Clock3,
   CreditCard,
   Edit3,
+  FileText,
   Flower2,
   Gift,
   Heart,
@@ -31,6 +32,7 @@ import {
   Store,
   Trash2,
   Truck,
+  Upload,
   Users,
   X,
 } from 'lucide-react'
@@ -38,6 +40,7 @@ import { api, hasToken, setToken } from './api'
 
 const CART_KEY = 'flowery_guest_cart'
 const WISHLIST_KEY = 'flowery_guest_wishlist'
+const BACKOFFICE_ROLES = new Set(['staff', 'editor', 'admin'])
 
 const money = (value) => new Intl.NumberFormat('vi-VN', {
   style: 'currency',
@@ -71,6 +74,43 @@ function readStorage(key, fallback) {
   } catch {
     return fallback
   }
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result)
+    reader.onerror = () => reject(new Error('Không thể đọc tệp đã chọn.'))
+    reader.readAsDataURL(file)
+  })
+}
+
+async function createAvatarDataUrl(file) {
+  if (!file?.type?.startsWith('image/')) throw new Error('Vui lòng chọn tệp ảnh.')
+  if (file.size > 3 * 1024 * 1024) throw new Error('Ảnh đại diện không được vượt quá 3 MB.')
+  const source = await fileToDataUrl(file)
+  const image = await new Promise((resolve, reject) => {
+    const element = new Image()
+    element.onload = () => resolve(element)
+    element.onerror = () => reject(new Error('Tệp ảnh không hợp lệ.'))
+    element.src = source
+  })
+  const side = Math.min(image.naturalWidth, image.naturalHeight)
+  const canvas = document.createElement('canvas')
+  canvas.width = 256
+  canvas.height = 256
+  canvas.getContext('2d').drawImage(
+    image,
+    (image.naturalWidth - side) / 2,
+    (image.naturalHeight - side) / 2,
+    side,
+    side,
+    0,
+    0,
+    256,
+    256,
+  )
+  return canvas.toDataURL('image/jpeg', 0.82)
 }
 
 function StatusBadge({ status }) {
@@ -124,9 +164,9 @@ function Header({ user, view, cartCount, wishlistCount, search, onSearch, naviga
             <button className={view === 'home' ? 'active' : ''} onClick={() => go('home')}>Cửa hàng</button>
             <button className={view === 'orders' ? 'active' : ''} onClick={() => go(user ? 'orders' : 'auth')}>Đơn hàng</button>
             <a href="#journal" onClick={() => setOpen(false)}>Cẩm nang hoa</a>
-            {user?.role === 'admin' && (
+            {BACKOFFICE_ROLES.has(user?.role) && (
               <button className={view === 'admin' ? 'active' : ''} onClick={() => go('admin')}>
-                Quản trị
+                Vận hành
               </button>
             )}
           </nav>
@@ -524,11 +564,7 @@ function AuthView({ onAuthenticated, notify }) {
         <span className="eyebrow">Chào mừng đến Flowery</span>
         <h1>Những điều chân thành luôn xứng đáng được trao thật đẹp.</h1>
         <p>Đăng nhập để lưu giỏ hàng, theo dõi giao hàng và gửi đánh giá sau khi nhận hoa.</p>
-        <div className="demo-card">
-          <b>Tài khoản trải nghiệm</b>
-          <code>lan@flowery.vn / Customer@123</code>
-          <code>admin@flowery.vn / Admin@123</code>
-        </div>
+        <div className="demo-card"><b>Bảo mật tài khoản</b><span>Không chia sẻ mật khẩu hoặc mã phiên đăng nhập. Flowery không bao giờ yêu cầu mật khẩu qua tin nhắn.</span></div>
       </section>
       <section className="auth-card">
         <div className="auth-tabs">
@@ -818,7 +854,10 @@ function AccountView({ user, onUpdated, notify }) {
     phone_number: user.phone_number,
     address: user.address,
     default_message: user.default_message,
+    avatar_url: user.avatar_url || '',
   })
+  const [passwordForm, setPasswordForm] = useState({ current_password: '', new_password: '', confirmation: '' })
+  const [avatarBusy, setAvatarBusy] = useState(false)
   const submit = async (event) => {
     event.preventDefault()
     try {
@@ -829,33 +868,87 @@ function AccountView({ user, onUpdated, notify }) {
       notify(error.message, 'error')
     }
   }
+  const chooseAvatar = async (event) => {
+    const [file] = event.target.files
+    if (!file) return
+    setAvatarBusy(true)
+    try {
+      const avatar_url = await createAvatarDataUrl(file)
+      setForm((current) => ({ ...current, avatar_url }))
+    } catch (error) {
+      notify(error.message, 'error')
+    } finally {
+      setAvatarBusy(false)
+      event.target.value = ''
+    }
+  }
+  const changePassword = async (event) => {
+    event.preventDefault()
+    if (passwordForm.new_password !== passwordForm.confirmation) {
+      notify('Mật khẩu xác nhận không khớp.', 'error')
+      return
+    }
+    try {
+      const response = await api.patch('/me/password', passwordForm)
+      onUpdated(response.user)
+      setPasswordForm({ current_password: '', new_password: '', confirmation: '' })
+      notify('Mật khẩu đã được thay đổi. Các phiên cũ không còn hiệu lực.')
+    } catch (error) {
+      notify(error.message, 'error')
+    }
+  }
   return (
     <main className="shell page profile-page">
       <aside className="profile-summary">
-        <span className="profile-avatar">{user.full_name.split(' ').map((word) => word[0]).slice(-2).join('')}</span>
+        <span className={`profile-avatar ${form.avatar_url ? 'profile-avatar--image' : ''}`}>
+          {form.avatar_url
+            ? <img src={form.avatar_url} alt={`Ảnh đại diện của ${user.full_name}`} />
+            : user.full_name.split(' ').map((word) => word[0]).slice(-2).join('')}
+        </span>
         <h2>{user.full_name}</h2><p>{user.email}</p>
         <StatusBadge status={user.role} />
         <div><ShieldCheck /><span><b>Tài khoản được bảo vệ</b><small>Phiên đăng nhập có chữ ký và thời hạn</small></span></div>
       </aside>
-      <form className="profile-form" onSubmit={submit}>
-        <span className="eyebrow">Thông tin nhận hoa</span><h1>Hồ sơ của bạn</h1>
-        <label>Họ và tên<input value={form.full_name} onChange={(event) => setForm({ ...form, full_name: event.target.value })} /></label>
-        <div className="form-grid">
-          <label>Email<input value={user.email} disabled /></label>
-          <label>Số điện thoại<input value={form.phone_number} onChange={(event) => setForm({ ...form, phone_number: event.target.value })} /></label>
-        </div>
-        <label>Địa chỉ mặc định<input value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} /></label>
-        <label>Lời chúc mặc định<textarea value={form.default_message} onChange={(event) => setForm({ ...form, default_message: event.target.value })} /></label>
-        <button className="button button--primary">Lưu thay đổi</button>
-      </form>
+      <div className="profile-forms">
+        {user.must_change_password ? <div className="form-alert"><LockKeyhole size={18} />Bạn đang dùng mật khẩu tạm. Hãy đổi mật khẩu trước khi tiếp tục.</div> : null}
+        <form className="profile-form" onSubmit={submit}>
+          <span className="eyebrow">Thông tin nhận hoa</span><h1>Hồ sơ của bạn</h1>
+          <label>Ảnh đại diện
+            <span className="file-control"><input type="file" accept="image/png,image/jpeg,image/webp" onChange={chooseAvatar} disabled={avatarBusy} /><Upload size={17} />{avatarBusy ? 'Đang xử lý ảnh...' : 'Chọn ảnh (tối đa 3 MB)'}</span>
+          </label>
+          <label>Họ và tên<input required minLength="2" value={form.full_name} onChange={(event) => setForm({ ...form, full_name: event.target.value })} /></label>
+          <div className="form-grid">
+            <label>Email<input value={user.email} disabled /></label>
+            <label>Số điện thoại<input inputMode="tel" placeholder="09xxxxxxxx" value={form.phone_number} onChange={(event) => setForm({ ...form, phone_number: event.target.value })} /></label>
+          </div>
+          <label>Địa chỉ mặc định<input maxLength="300" value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} /></label>
+          <label>Lời chúc mặc định<textarea maxLength="500" value={form.default_message} onChange={(event) => setForm({ ...form, default_message: event.target.value })} /></label>
+          <button className="button button--primary">Lưu thay đổi</button>
+        </form>
+        <form className="profile-form profile-form--security" onSubmit={changePassword}>
+          <span className="eyebrow">Bảo mật</span><h2>Đổi mật khẩu</h2>
+          <label>Mật khẩu hiện tại<input required type="password" autoComplete="current-password" value={passwordForm.current_password} onChange={(event) => setPasswordForm({ ...passwordForm, current_password: event.target.value })} /></label>
+          <div className="form-grid">
+            <label>Mật khẩu mới<input required minLength="10" type="password" autoComplete="new-password" value={passwordForm.new_password} onChange={(event) => setPasswordForm({ ...passwordForm, new_password: event.target.value })} /></label>
+            <label>Nhập lại mật khẩu<input required minLength="10" type="password" autoComplete="new-password" value={passwordForm.confirmation} onChange={(event) => setPasswordForm({ ...passwordForm, confirmation: event.target.value })} /></label>
+          </div>
+          <small>Mật khẩu cần ít nhất 10 ký tự và nên có chữ hoa, chữ thường, số, ký tự đặc biệt.</small>
+          <button className="button button--outline"><LockKeyhole size={17} />Đổi mật khẩu</button>
+        </form>
+      </div>
     </main>
   )
 }
 
-function AdminView({ notify, onLogout }) {
+function AdminView({ user, notify, onLogout }) {
   const [tab, setTab] = useState('overview')
   const [data, setData] = useState(null)
   const [editing, setEditing] = useState(null)
+  const [editingCategory, setEditingCategory] = useState(null)
+  const [editingArticle, setEditingArticle] = useState(null)
+  const canOperate = ['staff', 'admin'].includes(user.role)
+  const canEditContent = ['editor', 'admin'].includes(user.role)
+  const isAdmin = user.role === 'admin'
   const blankProduct = {
     name: '', slug: '', category_id: '', price: 450000, description: '',
     occasion: 'Sinh nhật', flower_type: 'Hoa hồng', color: 'Hồng',
@@ -863,31 +956,34 @@ function AdminView({ notify, onLogout }) {
   }
   const [productForm, setProductForm] = useState(blankProduct)
   const [categoryForm, setCategoryForm] = useState({ name: '', description: '' })
+  const blankArticle = { title: '', slug: '', summary: '', content: '', status: 'Draft', product_ids: [] }
+  const [articleForm, setArticleForm] = useState(blankArticle)
+  const [userForm, setUserForm] = useState({ full_name: '', email: '', role: 'staff', password: '' })
 
   const load = useCallback(async () => {
     try {
-      const [stats, products, categories, orders, reviews, users, refunds] = await Promise.all([
-        api.get('/admin/stats'),
-        api.get('/admin/products'),
-        api.get('/admin/categories'),
-        api.get('/admin/orders'),
-        api.get('/admin/reviews'),
-        api.get('/admin/users'),
-        api.get('/admin/refunds'),
-      ])
-      setData({
-        stats: stats.stats,
-        products: products.items,
-        categories: categories.items,
-        orders: orders.items,
-        reviews: reviews.items,
-        users: users.items,
-        refunds: refunds.items,
+      const next = { stats: {}, products: [], categories: [], orders: [], reviews: [], users: [], refunds: [], articles: [] }
+      const requests = [['stats', '/admin/stats', 'stats']]
+      if (canOperate) requests.push(
+        ['products', '/admin/products', 'items'],
+        ['categories', '/admin/categories', 'items'],
+        ['orders', '/admin/orders', 'items'],
+        ['reviews', '/admin/reviews', 'items'],
+        ['refunds', '/admin/refunds', 'items'],
+      )
+      if (canEditContent && !canOperate) requests.push(['products', '/products?limit=100', 'items'])
+      if (canEditContent) requests.push(['articles', '/admin/articles', 'items'])
+      if (isAdmin) requests.push(['users', '/admin/users', 'items'])
+      const responses = await Promise.all(requests.map(([, path]) => api.get(path)))
+      responses.forEach((response, index) => {
+        const [key, , responseKey] = requests[index]
+        next[key] = response[responseKey]
       })
+      setData(next)
     } catch (error) {
       notify(error.message, 'error')
     }
-  }, [notify])
+  }, [canEditContent, canOperate, isAdmin, notify])
   useEffect(() => { load() }, [load])
 
   const submitProduct = async (event) => {
@@ -924,9 +1020,110 @@ function AdminView({ notify, onLogout }) {
   const addCategory = async (event) => {
     event.preventDefault()
     try {
-      await api.post('/admin/categories', categoryForm)
+      if (editingCategory) await api.put(`/admin/categories/${editingCategory}`, categoryForm)
+      else await api.post('/admin/categories', categoryForm)
       setCategoryForm({ name: '', description: '' })
-      notify('Danh mục đã được tạo.')
+      setEditingCategory(null)
+      notify(editingCategory ? 'Danh mục đã được cập nhật.' : 'Danh mục đã được tạo.')
+      load()
+    } catch (error) {
+      notify(error.message, 'error')
+    }
+  }
+
+  const editCategory = (category) => {
+    setEditingCategory(category.category_id)
+    setCategoryForm({ name: category.name, description: category.description || '', active: Boolean(category.active) })
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const archiveCategory = async (category) => {
+    if (!window.confirm(`Ngừng sử dụng danh mục "${category.name}"?`)) return
+    try {
+      await api.delete(`/admin/categories/${category.category_id}`)
+      notify('Danh mục đã ngừng sử dụng.')
+      load()
+    } catch (error) {
+      notify(error.message, 'error')
+    }
+  }
+
+  const reactivateCategory = async (category) => {
+    try {
+      await api.put(`/admin/categories/${category.category_id}`, { active: true })
+      notify('Danh mục đã được kích hoạt lại.')
+      load()
+    } catch (error) {
+      notify(error.message, 'error')
+    }
+  }
+
+  const submitArticle = async (event) => {
+    event.preventDefault()
+    try {
+      if (editingArticle) await api.put(`/admin/articles/${editingArticle}`, articleForm)
+      else await api.post('/admin/articles', articleForm)
+      notify(editingArticle ? 'Bài viết đã được cập nhật.' : 'Bản nháp bài viết đã được tạo.')
+      setEditingArticle(null)
+      setArticleForm(blankArticle)
+      load()
+    } catch (error) {
+      notify(error.message, 'error')
+    }
+  }
+
+  const editArticle = (article) => {
+    setEditingArticle(article.article_id)
+    setArticleForm({
+      title: article.title,
+      slug: article.slug,
+      summary: article.summary,
+      content: article.content,
+      status: article.status === 'Published' ? 'Draft' : article.status,
+      product_ids: article.product_ids || [],
+    })
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const importArticle = async (event) => {
+    const [file] = event.target.files
+    if (!file) return
+    try {
+      if (!file.name.toLowerCase().endsWith('.docx')) throw new Error('Chỉ hỗ trợ tệp DOCX.')
+      if (file.size > 10 * 1024 * 1024) throw new Error('Tệp DOCX không được vượt quá 10 MB.')
+      const dataUrl = await fileToDataUrl(file)
+      const response = await api.post('/admin/articles/import', {
+        file_name: file.name,
+        docx_base64: dataUrl.split(',')[1],
+      })
+      notify(response.warnings?.[0] || 'Đã nhập DOCX thành bản nháp.')
+      load()
+    } catch (error) {
+      notify(error.message, 'error')
+    } finally {
+      event.target.value = ''
+    }
+  }
+
+  const publishArticle = async (article) => {
+    if (!window.confirm(`Xuất bản "${article.title}"?`)) return
+    try {
+      await api.post(`/admin/articles/${article.article_id}/publish`, {})
+      notify('Bài viết đã được xuất bản.')
+      load()
+    } catch (error) {
+      notify(error.message, 'error')
+    }
+  }
+
+  const createUser = async (event) => {
+    event.preventDefault()
+    try {
+      const response = await api.post('/admin/users', userForm)
+      setUserForm({ full_name: '', email: '', role: 'staff', password: '' })
+      notify(response.temporary_password
+        ? `Đã tạo tài khoản. Mật khẩu tạm (chỉ hiển thị lần này): ${response.temporary_password}`
+        : 'Đã tạo tài khoản.')
       load()
     } catch (error) {
       notify(error.message, 'error')
@@ -955,14 +1152,15 @@ function AdminView({ notify, onLogout }) {
 
   if (!data) return <main className="shell page"><Loading label="Đang tổng hợp dữ liệu vận hành..." /></main>
   const tabs = [
-    ['overview', 'Tổng quan', LayoutDashboard],
-    ['products', 'Sản phẩm', Boxes],
-    ['categories', 'Danh mục', Store],
-    ['orders', 'Đơn hàng', PackageCheck],
-    ['reviews', 'Đánh giá', MessageSquareText],
-    ['users', 'Người dùng', Users],
-    ['refunds', 'Hoàn tiền', BadgeDollarSign],
-  ]
+    ['overview', 'Tổng quan', LayoutDashboard, true],
+    ['products', 'Sản phẩm', Boxes, canOperate],
+    ['categories', 'Danh mục', Store, canOperate],
+    ['orders', 'Đơn hàng', PackageCheck, canOperate],
+    ['reviews', 'Đánh giá', MessageSquareText, canOperate],
+    ['articles', 'Cẩm nang', FileText, canEditContent],
+    ['users', 'Người dùng', Users, isAdmin],
+    ['refunds', 'Hoàn tiền', BadgeDollarSign, canOperate],
+  ].filter(([, , , visible]) => visible)
   return (
     <main className="admin-shell">
       <aside className="admin-nav">
@@ -990,10 +1188,14 @@ function AdminView({ notify, onLogout }) {
                 ['Đánh giá chờ duyệt', data.stats.pending_reviews, MessageSquareText],
               ].map(([label, value, Icon]) => <article key={label}><span><Icon /></span><div><small>{label}</small><strong>{value}</strong></div></article>)}
             </div>
-            <div className="admin-panel">
+            {canOperate ? <div className="admin-panel">
               <h2>Đơn gần đây</h2>
               <AdminOrderTable orders={data.orders.slice(0, 6)} mutate={mutate} />
-            </div>
+            </div> : <div className="admin-panel">
+              <h2>Không gian biên tập</h2>
+              <p className="muted">Bạn có {data.articles.filter((article) => article.status !== 'Published').length} bản thảo cần hoàn thiện và {data.articles.filter((article) => article.status === 'Published').length} bài đã xuất bản.</p>
+              <button className="button button--primary" onClick={() => setTab('articles')}>Mở cẩm nang hoa</button>
+            </div>}
           </>
         )}
 
@@ -1030,13 +1232,13 @@ function AdminView({ notify, onLogout }) {
         {tab === 'categories' && (
           <>
             <form className="admin-form admin-form--compact" onSubmit={addCategory}>
-              <h2>Thêm danh mục</h2>
+              <div className="admin-form__heading"><h2>{editingCategory ? 'Chỉnh sửa danh mục' : 'Thêm danh mục'}</h2>{editingCategory && <button type="button" className="text-button" onClick={() => { setEditingCategory(null); setCategoryForm({ name: '', description: '' }) }}>Hủy chỉnh sửa</button>}</div>
               <label>Tên danh mục<input required value={categoryForm.name} onChange={(event) => setCategoryForm({ ...categoryForm, name: event.target.value })} /></label>
               <label>Mô tả<input value={categoryForm.description} onChange={(event) => setCategoryForm({ ...categoryForm, description: event.target.value })} /></label>
-              <button className="button button--dark">Thêm danh mục</button>
+              <button className="button button--dark">{editingCategory ? 'Lưu thay đổi' : 'Thêm danh mục'}</button>
             </form>
-            <div className="admin-panel table-wrap"><table><thead><tr><th>Tên</th><th>Slug</th><th>Mô tả</th><th>Sản phẩm</th><th>Trạng thái</th></tr></thead>
-              <tbody>{data.categories.map((category) => <tr key={category.category_id}><td><b>{category.name}</b></td><td>{category.slug}</td><td>{category.description}</td><td>{category.product_count}</td><td>{category.active ? 'Hoạt động' : 'Ẩn'}</td></tr>)}</tbody>
+            <div className="admin-panel table-wrap"><table><thead><tr><th>Tên</th><th>Slug</th><th>Mô tả</th><th>Sản phẩm</th><th>Trạng thái</th><th></th></tr></thead>
+              <tbody>{data.categories.map((category) => <tr key={category.category_id}><td><b>{category.name}</b></td><td>{category.slug}</td><td>{category.description}</td><td>{category.product_count}</td><td>{category.active ? 'Hoạt động' : 'Ẩn'}</td><td><div className="row-actions"><button title="Chỉnh sửa" onClick={() => editCategory(category)}><Edit3 size={17} /></button>{category.active ? <button title="Ngừng sử dụng" onClick={() => archiveCategory(category)}><Trash2 size={17} /></button> : <button className="approve" title="Kích hoạt lại" onClick={() => reactivateCategory(category)}><Check size={17} /></button>}</div></td></tr>)}</tbody>
             </table></div>
           </>
         )}
@@ -1047,9 +1249,37 @@ function AdminView({ notify, onLogout }) {
           <tbody>{data.reviews.map((review) => <tr key={review.review_id}><td><b>{review.full_name}</b><small>{review.email}</small></td><td>{review.product_name}</td><td className="stars">{'★'.repeat(review.rating)}</td><td>{review.comment}</td><td><StatusBadge status={review.status} /></td><td>{review.status === 'Pending' && <div className="row-actions"><button className="approve" onClick={() => mutate(`/admin/reviews/${review.review_id}`, { status: 'Approved' }, 'Đánh giá đã được duyệt.')}><Check /></button><button className="reject" onClick={() => mutate(`/admin/reviews/${review.review_id}`, { status: 'Rejected' }, 'Đánh giá đã bị từ chối.')}><X /></button></div>}</td></tr>)}</tbody>
         </table></div>}
 
-        {tab === 'users' && <div className="admin-panel table-wrap"><table><thead><tr><th>Người dùng</th><th>Vai trò</th><th>Ngày tạo</th><th>Trạng thái</th><th></th></tr></thead>
-          <tbody>{data.users.map((entry) => <tr key={entry.user_id}><td><b>{entry.full_name}</b><small>{entry.email}</small></td><td><select value={entry.role} onChange={(event) => mutate(`/admin/users/${entry.user_id}`, { role: event.target.value }, 'Vai trò đã được cập nhật.')}>{['customer', 'staff', 'editor', 'warehouse', 'admin'].map((role) => <option key={role}>{role}</option>)}</select></td><td>{formatDate(entry.created_at)}</td><td><span className={`status ${entry.is_locked ? 'status--cancelled' : 'status--approved'}`}>{entry.is_locked ? 'Đã khóa' : 'Hoạt động'}</span></td><td><button className="text-button" onClick={() => mutate(`/admin/users/${entry.user_id}`, { is_locked: !entry.is_locked }, entry.is_locked ? 'Tài khoản đã mở khóa.' : 'Tài khoản đã khóa.')}>{entry.is_locked ? 'Mở khóa' : 'Khóa'}</button></td></tr>)}</tbody>
-        </table></div>}
+        {tab === 'articles' && <>
+          <form className="admin-form" onSubmit={submitArticle}>
+            <div className="admin-form__heading"><div><h2>{editingArticle ? 'Chỉnh sửa bài viết' : 'Tạo bài viết'}</h2><small>Biên tập theo vòng đời Draft → InReview → Published.</small></div><label className="button button--outline file-button"><Upload size={17} />Nhập DOCX<input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={importArticle} /></label></div>
+            <div className="admin-form-grid">
+              <label>Tiêu đề<input required minLength="4" value={articleForm.title} onChange={(event) => setArticleForm({ ...articleForm, title: event.target.value })} /></label>
+              <label>Slug (có thể để trống)<input value={articleForm.slug} onChange={(event) => setArticleForm({ ...articleForm, slug: event.target.value })} /></label>
+              <label className="wide">Tóm tắt<textarea required minLength="10" maxLength="600" value={articleForm.summary} onChange={(event) => setArticleForm({ ...articleForm, summary: event.target.value })} /></label>
+              <label className="wide">Nội dung<textarea required minLength="20" rows="10" value={articleForm.content} onChange={(event) => setArticleForm({ ...articleForm, content: event.target.value })} /></label>
+              <label>Trạng thái<select value={articleForm.status} onChange={(event) => setArticleForm({ ...articleForm, status: event.target.value })}><option value="Draft">Bản nháp</option><option value="InReview">Chờ duyệt</option></select></label>
+              <label>Sản phẩm liên quan<select multiple value={articleForm.product_ids.map(String)} onChange={(event) => setArticleForm({ ...articleForm, product_ids: [...event.target.selectedOptions].map((option) => Number(option.value)) })}>{data.products.map((product) => <option key={product.product_id} value={product.product_id}>{product.name}</option>)}</select><small>Giữ Ctrl để chọn nhiều sản phẩm.</small></label>
+            </div>
+            <div className="row-actions row-actions--text"><button className="button button--dark">{editingArticle ? 'Lưu phiên bản mới' : 'Lưu bản nháp'}</button>{editingArticle && <button type="button" className="button button--outline" onClick={() => { setEditingArticle(null); setArticleForm(blankArticle) }}>Hủy chỉnh sửa</button>}</div>
+          </form>
+          <div className="admin-panel table-wrap"><table><thead><tr><th>Bài viết</th><th>Tác giả</th><th>Phiên bản</th><th>Liên kết</th><th>Trạng thái</th><th></th></tr></thead>
+            <tbody>{data.articles.map((article) => <tr key={article.article_id}><td><b>{article.title}</b><small>{article.source_filename || article.slug}</small></td><td>{article.author_name || 'Flowery'}</td><td>v{article.version}</td><td>{article.product_ids?.length || 0} sản phẩm{article.media?.length ? ` · ${article.media.length} ảnh` : ''}</td><td><StatusBadge status={article.status} /></td><td><div className="row-actions"><button title="Chỉnh sửa" onClick={() => editArticle(article)}><Edit3 size={17} /></button>{article.status !== 'Published' && article.status !== 'Archived' && <button className="approve" title="Xuất bản" onClick={() => publishArticle(article)}><Check size={17} /></button>}{article.status !== 'Archived' && <button title="Lưu trữ" onClick={async () => { if (window.confirm(`Lưu trữ "${article.title}"?`)) { await api.delete(`/admin/articles/${article.article_id}`); notify('Bài viết đã được lưu trữ.'); load() } }}><Trash2 size={17} /></button>}</div></td></tr>)}</tbody>
+          </table></div>
+        </>}
+
+        {tab === 'users' && <>
+          <form className="admin-form admin-form--compact" onSubmit={createUser}>
+            <h2>Tạo tài khoản nội bộ</h2>
+            <label>Họ và tên<input required minLength="2" value={userForm.full_name} onChange={(event) => setUserForm({ ...userForm, full_name: event.target.value })} /></label>
+            <label>Email<input required type="email" value={userForm.email} onChange={(event) => setUserForm({ ...userForm, email: event.target.value })} /></label>
+            <label>Vai trò<select value={userForm.role} onChange={(event) => setUserForm({ ...userForm, role: event.target.value })}><option value="staff">Nhân viên vận hành</option><option value="editor">Biên tập viên</option><option value="customer">Khách hàng</option></select></label>
+            <label>Mật khẩu ban đầu<input type="password" minLength="10" placeholder="Để trống để hệ thống tự sinh" value={userForm.password} onChange={(event) => setUserForm({ ...userForm, password: event.target.value })} /></label>
+            <button className="button button--dark">Tạo tài khoản</button>
+          </form>
+          <div className="admin-panel table-wrap"><table><thead><tr><th>Người dùng</th><th>Vai trò</th><th>Ngày tạo</th><th>Trạng thái</th><th></th></tr></thead>
+            <tbody>{data.users.map((entry) => <tr key={entry.user_id}><td><b>{entry.full_name}</b><small>{entry.email}{entry.must_change_password ? ' · Cần đổi mật khẩu' : ''}</small></td><td><select value={entry.role} disabled={entry.role === 'admin'} onChange={(event) => mutate(`/admin/users/${entry.user_id}`, { role: event.target.value }, 'Vai trò đã được cập nhật.')}>{['customer', 'staff', 'editor'].map((role) => <option key={role}>{role}</option>)}{entry.role === 'admin' && <option value="admin">admin</option>}</select></td><td>{formatDate(entry.created_at)}</td><td><span className={`status ${entry.is_locked ? 'status--cancelled' : 'status--approved'}`}>{entry.is_locked ? 'Đã khóa' : 'Hoạt động'}</span></td><td><button className="text-button" disabled={entry.user_id === user.user_id || entry.role === 'admin'} onClick={() => mutate(`/admin/users/${entry.user_id}`, { is_locked: !entry.is_locked }, entry.is_locked ? 'Tài khoản đã mở khóa.' : 'Tài khoản đã khóa.')}>{entry.is_locked ? 'Mở khóa' : 'Khóa'}</button></td></tr>)}</tbody>
+          </table></div>
+        </>}
 
         {tab === 'refunds' && <div className="admin-panel table-wrap"><table><thead><tr><th>Đơn hàng</th><th>Khách hàng</th><th>Lý do / bằng chứng</th><th>Số tiền</th><th>Trạng thái</th><th></th></tr></thead>
           <tbody>{data.refunds.length === 0 ? <tr><td colSpan="6" className="table-empty">Chưa có yêu cầu hoàn tiền.</td></tr> : data.refunds.map((refund) => <tr key={refund.refund_id}><td><b>{refund.order_number}</b></td><td>{refund.full_name}</td><td>{refund.reason}{refund.evidence_url && <small><a href={refund.evidence_url} target="_blank" rel="noreferrer">Mở bằng chứng</a></small>}{refund.rejection_reason && <small className="text-danger">Từ chối: {refund.rejection_reason}</small>}</td><td>{money(refund.amount)}</td><td><StatusBadge status={refund.status} />{refund.status === 'Approved' && <small>Chờ cổng thanh toán xác nhận</small>}</td><td>{refund.status === 'Pending' && <div className="row-actions"><button className="approve" title="Duyệt yêu cầu" onClick={() => mutate(`/admin/refunds/${refund.refund_id}`, { status: 'Approved' }, 'Yêu cầu đã được duyệt và đang chờ cổng thanh toán.')}><Check /></button><button className="reject" title="Từ chối yêu cầu" onClick={() => rejectRefund(refund)}><X /></button></div>}</td></tr>)}</tbody>
@@ -1235,7 +1465,7 @@ function App() {
     setUser(payload.user)
     await syncGuestData()
     await loadCustomerData()
-    navigate(payload.user.role === 'admin' ? 'admin' : 'home')
+    navigate(BACKOFFICE_ROLES.has(payload.user.role) ? 'admin' : 'home')
   }
 
   const logout = () => {
@@ -1375,8 +1605,8 @@ function App() {
       {view === 'orders' && user && <OrdersView notify={notify} />}
       {view === 'orders' && !user && <AuthView onAuthenticated={onAuthenticated} notify={notify} />}
       {view === 'account' && user && <AccountView user={user} onUpdated={setUser} notify={notify} />}
-      {view === 'admin' && user?.role === 'admin' && <AdminView notify={notify} onLogout={logout} />}
-      {view === 'admin' && user?.role !== 'admin' && <AuthView onAuthenticated={onAuthenticated} notify={notify} />}
+      {view === 'admin' && BACKOFFICE_ROLES.has(user?.role) && <AdminView user={user} notify={notify} onLogout={logout} />}
+      {view === 'admin' && !BACKOFFICE_ROLES.has(user?.role) && <AuthView onAuthenticated={onAuthenticated} notify={notify} />}
 
       {!adminView && <Footer />}
       <Toast toast={toast} onClose={() => setToast(null)} />
