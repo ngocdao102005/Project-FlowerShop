@@ -231,6 +231,24 @@ function generateSecret(secretPath) {
   return secret;
 }
 
+function generatePartnerApiKey(secretPath) {
+  if (process.env.PARTNER_API_KEY) {
+    const configured = String(process.env.PARTNER_API_KEY).trim();
+    if (configured.length < 24 || /^(?:demo-|replace-with-)/i.test(configured)) {
+      throw new Error('PARTNER_API_KEY phải là khóa ngẫu nhiên dài ít nhất 24 ký tự.');
+    }
+    return configured;
+  }
+  fs.mkdirSync(path.dirname(secretPath), { recursive: true });
+  if (fs.existsSync(secretPath)) {
+    const stored = fs.readFileSync(secretPath, 'utf8').trim();
+    if (stored.length >= 24) return stored;
+  }
+  const secret = crypto.randomBytes(32).toString('base64url');
+  fs.writeFileSync(secretPath, secret, { encoding: 'utf8', mode: 0o600 });
+  return secret;
+}
+
 function audit(db, ctx, action, entityType, entityId = '', metadata = {}) {
   db.prepare(`
     INSERT INTO audit_logs
@@ -2001,10 +2019,9 @@ function createApplication(options = {}) {
   const secret = options.secret || generateSecret(secretPath);
   const mysqlMode = String(process.env.DB_CLIENT || '').toLowerCase() === 'mysql'
     && databasePath !== ':memory:';
-  const partnerApiKey = options.partnerApiKey || process.env.PARTNER_API_KEY || 'demo-partner-key';
-  if (mysqlMode && (partnerApiKey.length < 24 || /^(?:demo-|replace-with-)/i.test(partnerApiKey))) {
-    throw new Error('PARTNER_API_KEY phải là khóa ngẫu nhiên dài ít nhất 24 ký tự khi dùng MySQL.');
-  }
+  const partnerSecretPath = path.join(__dirname, 'data', 'partner-api.key');
+  const partnerApiKey = options.partnerApiKey
+    || (mysqlMode ? generatePartnerApiKey(partnerSecretPath) : process.env.PARTNER_API_KEY || 'demo-partner-key');
   const staticDir = options.staticDir || path.join(root, 'client', 'dist');
   const db = openDatabase(databasePath);
   const router = createRouter();

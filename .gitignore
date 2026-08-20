@@ -7,6 +7,7 @@ server/data/*.db
 server/data/*.db-shm
 server/data/*.db-wal
 server/data/app.secret
+server/data/partner-api.key
 .env
 *.log
 .DS_Store

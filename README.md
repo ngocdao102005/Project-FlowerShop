@@ -161,7 +161,9 @@ triển khai:
 - `CLIENT_ORIGIN`: origin frontend được phép gọi API trong chế độ phát triển.
 
 Nếu không đặt `APP_SECRET`, server sẽ tự sinh khóa và lưu vào
-`server/data/app.secret`.
+`server/data/app.secret`. Nếu không đặt `PARTNER_API_KEY`, server cũng tự sinh
+khóa tích hợp riêng và lưu vào `server/data/partner-api.key`. Hai tệp này đều
+bị Git bỏ qua và khóa không được in ra terminal.
 
 ### Di chuyển SQLite cũ sang MySQL
 
