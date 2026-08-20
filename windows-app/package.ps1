@@ -24,7 +24,7 @@ New-Item -ItemType Directory -Path $distDirectory -Force | Out-Null
     --dest $distDirectory `
     --main-jar FloweryStaff.jar `
     --main-class vn.flowery.staff.App `
-    --app-version 1.6.0 `
+    --app-version 1.6.1 `
     --vendor 'Nguyen Ngoc Dao' `
     --description 'Flowery Windows App cho nhan vien va quan tri' `
     --java-options '-Dfile.encoding=UTF-8'

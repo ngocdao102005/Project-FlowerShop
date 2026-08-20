@@ -7,6 +7,7 @@ const {
 const { columnMigrations, migrationStatements, statements } = require('./mysql-schema');
 
 class MysqlDatabaseSync {
+  // Adapter đồng bộ: chuyển yêu cầu SQL sang worker để API dùng chung cú pháp với SQLite.
   constructor(config) {
     const { port1, port2 } = new MessageChannel();
     this.port = port1;
@@ -59,6 +60,7 @@ class MysqlDatabaseSync {
 }
 
 function readConfig(overrides = {}) {
+  // Chỉ đọc thông tin kết nối từ tham số hoặc biến môi trường, không ghi/log mật khẩu.
   return {
     host: overrides.host || process.env.MYSQL_HOST || '127.0.0.1',
     port: Number(overrides.port || process.env.MYSQL_PORT || 3306),
@@ -70,6 +72,7 @@ function readConfig(overrides = {}) {
 }
 
 function openMysqlDatabase(overrides = {}) {
+  // Kết nối, tạo bảng, bổ sung cột rồi mới chạy các migration chuẩn hóa dữ liệu cũ.
   try {
     require.resolve('mysql2/promise');
   } catch {

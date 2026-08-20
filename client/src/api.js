@@ -14,6 +14,7 @@ export function hasToken() {
 }
 
 export async function request(path, options = {}) {
+  // Khối HTTP dùng chung: tự gắn token, mã hóa JSON và chuẩn hóa lỗi từ API.
   const headers = new Headers(options.headers || {})
   headers.set('Accept', 'application/json')
   if (token) headers.set('Authorization', `Bearer ${token}`)
@@ -35,7 +36,8 @@ export async function request(path, options = {}) {
     ? await response.json()
     : await response.text()
   if (!response.ok) {
-    const error = new Error(payload?.error || payload || 'Không thể kết nối hệ thống.')
+    const requestId = payload?.request_id ? ` (mã lỗi: ${payload.request_id})` : ''
+    const error = new Error(`${payload?.error || payload || 'Không thể kết nối hệ thống.'}${response.status >= 500 ? requestId : ''}`)
     error.status = response.status
     error.payload = payload
     throw error

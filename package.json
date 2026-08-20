@@ -1,6 +1,6 @@
 {
   "name": "flowery-shop",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "private": true,
   "description": "Hệ thống bán hoa trực tuyến Hybrid: Web, Backend API và Windows App",
   "scripts": {

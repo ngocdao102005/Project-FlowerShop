@@ -6,7 +6,12 @@ API Node.js, cơ sở dữ liệu MySQL 8.4 LTS và Windows App Java cho nhân v
 
 Sơ đồ kiến trúc tham chiếu được lưu tại `docs/architecture.png`.
 
-## Cập nhật 1.6.0
+## Cập nhật 1.6.1
+
+- Sửa lỗi tạo tài khoản trên database MySQL được nâng cấp từ bản cũ: chuẩn hóa
+  giá trị mặc định của `users.avatar_url` và luôn truyền avatar rỗng khi tạo user.
+- Bổ sung kiểm tra mật khẩu ngay trên giao diện và mã lỗi request cho lỗi server.
+- Thêm chú thích tiếng Việt cho các khối chức năng chính trong mã nguồn.
 
 - Chuẩn hóa mô hình vai trò theo tài liệu hướng đối tượng: `Customer`, `Staff`,
   `Editor`, `Admin`; hợp nhất trách nhiệm kho/CSKH vào `Staff` và loại vai trò
@@ -19,7 +24,7 @@ Sơ đồ kiến trúc tham chiếu được lưu tại `docs/architecture.png`.
   đồng thời giữ endpoint cũ ở chế độ tương thích.
 - Nâng cấp hồ sơ với ảnh đại diện được thu nhỏ tại trình duyệt, xác thực số điện
   thoại/địa chỉ và đổi mật khẩu; tài khoản do Admin tạo bắt buộc đổi mật khẩu tạm.
-- Nâng cấp Windows App 1.6.0 với RBAC mới và màn hình quản lý cẩm nang bằng các
+- Nâng cấp Windows App 1.6.1 với RBAC mới và màn hình quản lý cẩm nang bằng các
   đối tượng Java/HTTP API, không kết nối trực tiếp MySQL.
 
 ## Cập nhật 1.5.0
@@ -51,7 +56,7 @@ Sơ đồ kiến trúc tham chiếu được lưu tại `docs/architecture.png`.
 - Sửa hiện tượng dấu và ký tự bị tách trong các tiêu đề serif trên storefront và
   backoffice.
 
-## Windows App 1.6.0
+## Windows App 1.6.1
 
 Dự án có thêm ứng dụng desktop `windows-app/` dành cho staff, editor và admin:
 
@@ -135,14 +140,14 @@ riêng và không được dùng làm tài khoản vận hành.
 Dữ liệu mẫu còn có một đơn đã giao cho tài khoản khách hàng để thử chức năng đánh
 giá và hoàn tiền.
 
-Partner XML mẫu:
+Partner XML chỉ được gọi từ backend đối tác đã được cấp khóa:
 
 ```text
-http://127.0.0.1:5000/api/partner/catalog.xml?key=demo-partner-key
+curl -H "X-API-Key: <PARTNER_API_KEY>" http://127.0.0.1:5000/api/partner/catalog.xml
 ```
 
-Trong môi trường thật, bắt buộc thay `APP_SECRET`, `PARTNER_API_KEY` và chỉ truyền
-API key qua header `X-API-Key`.
+Không đặt API key trong URL, source frontend, ảnh chụp hoặc log. Chỉ truyền khóa
+qua header `X-API-Key` từ backend của đối tác.
 
 ## Cấu hình
 

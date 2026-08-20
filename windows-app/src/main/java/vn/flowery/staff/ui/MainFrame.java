@@ -108,7 +108,7 @@ public final class MainFrame extends JFrame {
         logo.setFont(new Font("Segoe UI", Font.BOLD, 25));
         logo.setAlignmentX(LEFT_ALIGNMENT);
 
-        JLabel appName = new JLabel("HYBRID SYSTEM | 1.6.0");
+        JLabel appName = new JLabel("HYBRID SYSTEM | 1.6.1");
         appName.setForeground(new Color(179, 212, 197));
         appName.setFont(new Font("Segoe UI", Font.BOLD, 11));
         appName.setAlignmentX(LEFT_ALIGNMENT);

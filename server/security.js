@@ -1,5 +1,6 @@
 const crypto = require('node:crypto');
 
+// Băm mật khẩu bằng scrypt và salt ngẫu nhiên; database không lưu mật khẩu gốc.
 function hashPassword(password) {
   const salt = crypto.randomBytes(16);
   const hash = crypto.scryptSync(password, salt, 64);
@@ -15,6 +16,7 @@ function verifyPassword(password, stored) {
 }
 
 function signToken(payload, secret, expiresInSeconds = 60 * 60 * 12) {
+  // Token có thời hạn và chữ ký HMAC để phát hiện dữ liệu bị sửa.
   const now = Math.floor(Date.now() / 1000);
   const body = Buffer.from(JSON.stringify({
     ...payload,

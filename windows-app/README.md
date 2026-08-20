@@ -11,7 +11,7 @@ và quản trị viên của hệ thống bán hoa trực tuyến.
 - Hợp đồng API hiện tại tương thích với backend Node.js/MySQL; việc chuyển database
   không làm thay đổi endpoint hoặc cấu trúc JSON của Windows App.
 
-## Phiên bản 1.6.0
+## Phiên bản 1.6.1
 
 - Chuẩn hóa vai trò `staff`, `editor`, `admin`; Staff đảm nhiệm catalog, tồn kho,
   đơn hàng và hoàn tiền, Editor đảm nhiệm cẩm nang hoa.

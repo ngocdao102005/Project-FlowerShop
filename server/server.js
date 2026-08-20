@@ -28,6 +28,9 @@ class HttpError extends Error {
   }
 }
 
+// === Khối HTTP và chuẩn hóa dữ liệu ===
+// Các hàm trong khối này đọc request, trả response JSON và làm sạch dữ liệu
+// trước khi dữ liệu được chuyển xuống tầng nghiệp vụ/database.
 function json(res, status, payload, extraHeaders = {}) {
   const body = JSON.stringify(payload);
   res.writeHead(status, {
@@ -216,6 +219,9 @@ function createRouter() {
   };
 }
 
+// === Khối quản lý khóa bí mật cục bộ ===
+// Ưu tiên khóa do môi trường cung cấp; nếu chưa có thì sinh khóa mạnh và lưu
+// ngoài Git để phiên đăng nhập/API partner vẫn ổn định sau khi restart server.
 function generateSecret(secretPath) {
   if (process.env.APP_SECRET) {
     const configured = String(process.env.APP_SECRET).trim();
@@ -264,6 +270,9 @@ function audit(db, ctx, action, entityType, entityId = '', metadata = {}) {
   );
 }
 
+// === Khối xác thực và phân quyền ===
+// Tập trung kiểm tra phiên đăng nhập và vai trò để các route không phải lặp lại
+// logic bảo mật ở từng endpoint.
 function requireUser(ctx, roles = null) {
   if (!ctx.user) throw new HttpError(401, 'Vui lòng đăng nhập để tiếp tục.');
   if (roles && !roles.includes(ctx.user.role)) {
@@ -363,6 +372,7 @@ function registerRoutes(router, db, config) {
   const supportRoles = ['staff', 'admin'];
   const contentRoles = ['editor', 'admin'];
 
+  // === Khối giám sát hệ thống ===
   router.add('GET', /^\/api\/health$/, async (ctx) => {
     const database = db.prepare('SELECT 1 AS ok').get();
     json(ctx.res, 200, {
@@ -374,6 +384,8 @@ function registerRoutes(router, db, config) {
     return true;
   });
 
+  // === Khối tài khoản khách hàng ===
+  // Đăng ký, đăng nhập, hồ sơ và đổi mật khẩu của người dùng cuối.
   router.add('POST', /^\/api\/auth\/register$/, async (ctx) => {
     const body = await readBody(ctx.req);
     const email = normalizeEmail(body.email);
@@ -389,8 +401,8 @@ function registerRoutes(router, db, config) {
     try {
       const result = db.prepare(`
         INSERT INTO users
-          (email, password_hash, full_name, phone_number, address, default_message)
-        VALUES (?, ?, ?, ?, ?, ?)
+          (email, password_hash, full_name, phone_number, address, default_message, avatar_url)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
       `).run(
         email,
         hashPassword(password),
@@ -398,6 +410,7 @@ function registerRoutes(router, db, config) {
         normalizePhone(body.phone_number),
         cleanText(body.address, 300),
         cleanText(body.default_message, 300),
+        '',
       );
       const user = db.prepare('SELECT * FROM users WHERE user_id = ?')
         .get(Number(result.lastInsertRowid));
@@ -514,6 +527,8 @@ function registerRoutes(router, db, config) {
     return true;
   });
 
+  // === Khối catalog công khai ===
+  // Cung cấp danh mục, sản phẩm, tìm kiếm và nội dung cẩm nang cho Web App.
   router.add('GET', /^\/api\/categories$/, async (ctx) => {
     const items = db.prepare(`
       SELECT c.*, COUNT(p.product_id) AS product_count
@@ -651,6 +666,8 @@ function registerRoutes(router, db, config) {
     return true;
   });
 
+  // === Khối wishlist và giỏ hàng ===
+  // Quản lý danh sách yêu thích cùng giỏ hàng riêng của người đang đăng nhập.
   router.add('GET', /^\/api\/wishlist$/, async (ctx) => {
     const user = requireUser(ctx, customerRoles);
     const items = db.prepare(`
@@ -750,6 +767,8 @@ function registerRoutes(router, db, config) {
     return true;
   });
 
+  // === Khối vòng đời đơn hàng khách hàng ===
+  // Checkout, xem đơn, hủy đơn, hoàn tồn kho và tiếp nhận yêu cầu hoàn tiền.
   router.add('POST', /^\/api\/orders$/, async (ctx) => {
     const user = requireUser(ctx, customerRoles);
     const body = await readBody(ctx.req);
@@ -1009,6 +1028,8 @@ function registerRoutes(router, db, config) {
     }
   }
 
+  // === Khối đánh giá sau mua ===
+  // Chỉ cho phép đánh giá dòng hàng thuộc đơn Delivered và chống đánh giá lặp.
   router.add('POST', /^\/api\/order-items\/(\d+)\/reviews$/, async (ctx, rawOrderItemId) => {
     await createReview(ctx, positiveInteger(rawOrderItemId));
     return true;
@@ -1039,6 +1060,8 @@ function registerRoutes(router, db, config) {
     contentRoles,
   });
 
+  // === Khối tích hợp vận chuyển và hoàn tiền ===
+  // Tiếp nhận webhook có xác thực và đồng bộ trạng thái từ hệ thống bên ngoài.
   router.add('GET', /^\/api\/integrations\/shipments\/([A-Za-z0-9-]+)$/, async (ctx, trackingCode) => {
     const key = ctx.req.headers['x-api-key'];
     if (key !== partnerApiKey) throw new HttpError(401, 'Integration API key không hợp lệ.');
@@ -1162,6 +1185,8 @@ function registerRoutes(router, db, config) {
     return true;
   });
 
+  // === Khối Partner API/XML và media ===
+  // Xuất mini-catalog cho website đối tác và phục vụ tài nguyên được quản lý.
   router.add('GET', /^\/api\/partner\/catalog(?:\.xml)?$/, async (ctx) => {
     const key = ctx.req.headers['x-api-key'] || ctx.url.searchParams.get('key');
     if (key !== partnerApiKey) throw new HttpError(401, 'Partner API key không hợp lệ.');
@@ -1210,6 +1235,8 @@ function registerAdminRoutes(router, db, roles) {
     contentRoles,
   } = roles;
 
+  // === Khối backoffice: tổng quan và catalog ===
+  // Staff/Admin theo dõi số liệu và CRUD sản phẩm, tồn kho, danh mục.
   router.add('GET', /^\/api\/admin\/stats$/, async (ctx) => {
     requireUser(ctx, ['staff', 'editor', 'admin']);
     const stats = {
@@ -1433,6 +1460,8 @@ function registerAdminRoutes(router, db, roles) {
     return true;
   });
 
+  // === Khối backoffice: quản trị nội dung ===
+  // Editor/Admin tạo phiên bản bài viết, nhập DOCX, xuất bản và lưu trữ.
   router.add('GET', /^\/api\/admin\/articles$/, async (ctx) => {
     requireUser(ctx, contentRoles);
     const rows = db.prepare(`
@@ -1589,6 +1618,8 @@ function registerAdminRoutes(router, db, roles) {
     return true;
   });
 
+  // === Khối backoffice: vận hành đơn và đánh giá ===
+  // Staff/Admin cập nhật trạng thái đơn hợp lệ và kiểm duyệt đánh giá.
   router.add('GET', /^\/api\/admin\/orders$/, async (ctx) => {
     requireUser(ctx, operationsRoles);
     const rows = db.prepare(`
@@ -1692,6 +1723,8 @@ function registerAdminRoutes(router, db, roles) {
     return true;
   });
 
+  // === Khối backoffice: người dùng và phân quyền ===
+  // Chỉ Admin được tạo tài khoản cấp dưới, đổi vai trò và khóa/mở khóa.
   router.add('GET', /^\/api\/admin\/users$/, async (ctx) => {
     requireUser(ctx, adminRoles);
     const items = db.prepare(`
@@ -1728,14 +1761,15 @@ function registerAdminRoutes(router, db, roles) {
     try {
       const result = db.prepare(`
         INSERT INTO users
-          (email, password_hash, full_name, phone_number, address, role, must_change_password)
-        VALUES (?, ?, ?, ?, ?, ?, 1)
+          (email, password_hash, full_name, phone_number, address, avatar_url, role, must_change_password)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1)
       `).run(
         email,
         hashPassword(temporaryPassword),
         fullName,
         normalizePhone(body.phone_number),
         cleanText(body.address, 500),
+        '',
         role,
       );
       const userId = Number(result.lastInsertRowid);
@@ -1779,6 +1813,8 @@ function registerAdminRoutes(router, db, roles) {
     return true;
   });
 
+  // === Khối backoffice: hoàn tiền và audit ===
+  // Theo dõi quyết định hoàn tiền và cung cấp dấu vết thao tác quản trị.
   router.add('GET', /^\/api\/admin\/refunds$/, async (ctx) => {
     requireUser(ctx, supportRoles);
     const items = db.prepare(`
@@ -2011,6 +2047,8 @@ function serveStatic(req, res, pathname, staticDir) {
 }
 
 function createApplication(options = {}) {
+  // === Khối lắp ráp ứng dụng ===
+  // Khởi tạo database, khóa bí mật, router, middleware bảo mật và static files.
   const root = path.resolve(__dirname, '..');
   const databasePath = options.databasePath
     || process.env.DATABASE_PATH
@@ -2111,6 +2149,8 @@ function createApplication(options = {}) {
 }
 
 function startServer(options = {}) {
+  // === Khối khởi động tiến trình HTTP ===
+  // Bind host/port sau khi toàn bộ migration và dependency đã sẵn sàng.
   const app = createApplication(options);
   const server = http.createServer(app.handler);
   const port = options.port ?? Number(process.env.PORT || 5000);

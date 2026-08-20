@@ -5,6 +5,7 @@ const { hashPassword, isStrongPassword } = require('./security');
 const { openMysqlDatabase } = require('./mysql-database');
 
 function openDatabase(databasePath, options = {}) {
+  // Chọn adapter theo DB_CLIENT nhưng giữ chung giao diện prepare/get/all/run.
   const client = String(options.client || process.env.DB_CLIENT || 'sqlite').toLowerCase();
   if (client === 'mysql' && databasePath !== ':memory:') {
     const db = openMysqlDatabase(options.mysql);
@@ -23,6 +24,7 @@ function openDatabase(databasePath, options = {}) {
 }
 
 function migrate(db) {
+  // Tạo schema SQLite mới và nâng cấp database cũ theo hướng không làm mất dữ liệu.
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       user_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -266,18 +268,20 @@ function migrate(db) {
 }
 
 function ensureColumn(db, table, column, definition) {
+  // SQLite không có ADD COLUMN IF NOT EXISTS nên phải kiểm tra metadata trước.
   const exists = db.prepare(`PRAGMA table_info(${table})`).all()
     .some((entry) => entry.name === column);
   if (!exists) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
 function seed(db, options = {}) {
+  // MySQL thật yêu cầu bootstrap admin qua biến môi trường; SQLite local dùng dữ liệu mẫu.
   const userCount = db.prepare('SELECT COUNT(*) AS count FROM users').get().count;
   if (userCount === 0) {
     const insertUser = db.prepare(`
       INSERT INTO users
-        (email, password_hash, full_name, phone_number, address, default_message, role)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+        (email, password_hash, full_name, phone_number, address, default_message, avatar_url, role)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
     if (options.requireBootstrapAdmin) {
       const email = String(process.env.BOOTSTRAP_ADMIN_EMAIL || '').trim().toLowerCase();
@@ -292,16 +296,16 @@ function seed(db, options = {}) {
             + 'BOOTSTRAP_ADMIN_PASSWORD mạnh trong .env rồi khởi động lại.',
         );
       }
-      insertUser.run(email, hashPassword(password), fullName || 'Quản trị Flowery', '', '', '', 'admin');
+      insertUser.run(email, hashPassword(password), fullName || 'Quản trị Flowery', '', '', '', '', 'admin');
     } else {
       insertUser.run(
         'admin@flowery.vn', hashPassword('Admin@123'), 'Quản trị Flowery',
-        '0900000001', '25 Nguyễn Huệ, Quận 1, TP.HCM', '', 'admin',
+        '0900000001', '25 Nguyễn Huệ, Quận 1, TP.HCM', '', '', 'admin',
       );
       insertUser.run(
         'lan@flowery.vn', hashPassword('Customer@123'), 'Nguyễn Ngọc Lan',
         '0900000002', '18 Lê Lợi, Quận 1, TP.HCM',
-        'Chúc bạn luôn rạng rỡ như những đóa hoa.', 'customer',
+        'Chúc bạn luôn rạng rỡ như những đóa hoa.', '', 'customer',
       );
     }
   }

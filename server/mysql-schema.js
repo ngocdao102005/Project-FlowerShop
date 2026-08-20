@@ -1,3 +1,5 @@
+// === Khối schema chuẩn ===
+// Các câu lệnh này tạo đầy đủ bảng khi triển khai Flowery trên MySQL mới.
 const statements = [
   `CREATE TABLE IF NOT EXISTS users (
     user_id INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -281,8 +283,10 @@ const statements = [
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`,
 ];
 
+// === Khối bổ sung cột ===
+// Metadata được kiểm tra trước trong mysql-database.js để migration chạy lặp an toàn.
 const columnMigrations = [
-  ['users', 'avatar_url', `MEDIUMTEXT NOT NULL`],
+  ['users', 'avatar_url', `MEDIUMTEXT NOT NULL DEFAULT ('')`],
   ['users', 'must_change_password', `TINYINT(1) NOT NULL DEFAULT 0`],
   ['reviews', 'order_item_id', `INT UNSIGNED NULL`],
   ['articles', 'author_id', `INT UNSIGNED NULL`],
@@ -293,7 +297,10 @@ const columnMigrations = [
   ['articles', 'updated_at', `DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`],
 ];
 
+// === Khối chuẩn hóa dữ liệu/schema cũ ===
+// Dòng ALTER khắc phục database 1.5.x có avatar_url NOT NULL nhưng thiếu default.
 const migrationStatements = [
+  `ALTER TABLE users MODIFY COLUMN avatar_url MEDIUMTEXT NOT NULL DEFAULT ('')`,
   `UPDATE users SET role = 'staff' WHERE role = 'warehouse'`,
   `UPDATE articles SET status = IF(published = 1, 'Published', 'Draft'),
      published_at = IF(published = 1 AND published_at = '', DATE_FORMAT(created_at, '%Y-%m-%dT%H:%i:%s'), published_at)`,

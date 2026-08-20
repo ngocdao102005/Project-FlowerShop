@@ -941,6 +941,8 @@ function AccountView({ user, onUpdated, notify }) {
 }
 
 function AdminView({ user, notify, onLogout }) {
+  // === Khối trạng thái Backoffice ===
+  // Lưu dữ liệu từng phân hệ và chỉ tải endpoint phù hợp với vai trò hiện tại.
   const [tab, setTab] = useState('overview')
   const [data, setData] = useState(null)
   const [editing, setEditing] = useState(null)
@@ -1119,6 +1121,13 @@ function AdminView({ user, notify, onLogout }) {
   const createUser = async (event) => {
     event.preventDefault()
     try {
+      // Kiểm tra ngay trên UI để người dùng nhận thông báo cụ thể trước khi gọi API.
+      if (userForm.password
+          && (userForm.password.length < 8
+            || !/[A-Za-z]/.test(userForm.password)
+            || !/\d/.test(userForm.password))) {
+        throw new Error('Mật khẩu ban đầu phải có ít nhất 8 ký tự, gồm chữ và số.')
+      }
       const response = await api.post('/admin/users', userForm)
       setUserForm({ full_name: '', email: '', role: 'staff', password: '' })
       notify(response.temporary_password
@@ -1169,7 +1178,7 @@ function AdminView({ user, notify, onLogout }) {
           <button key={value} className={tab === value ? 'active' : ''} onClick={() => setTab(value)}><Icon size={18} />{label}</button>
         ))}</nav>
         <footer className="admin-nav__footer">
-          <a href="/api/partner/catalog.xml?key=demo-partner-key" target="_blank" rel="noreferrer">Partner XML <ArrowRight size={15} /></a>
+          <span title="Partner API chỉ được gọi từ hệ thống đã cấp khóa">Partner API/XML bảo mật</span>
           <button type="button" onClick={onLogout}><LogOut size={16} />Đăng xuất</button>
         </footer>
       </aside>
@@ -1267,13 +1276,14 @@ function AdminView({ user, notify, onLogout }) {
           </table></div>
         </>}
 
+        {/* Khối người dùng: tạo tài khoản cấp dưới và quản lý RBAC/khóa tài khoản. */}
         {tab === 'users' && <>
           <form className="admin-form admin-form--compact" onSubmit={createUser}>
             <h2>Tạo tài khoản nội bộ</h2>
             <label>Họ và tên<input required minLength="2" value={userForm.full_name} onChange={(event) => setUserForm({ ...userForm, full_name: event.target.value })} /></label>
             <label>Email<input required type="email" value={userForm.email} onChange={(event) => setUserForm({ ...userForm, email: event.target.value })} /></label>
             <label>Vai trò<select value={userForm.role} onChange={(event) => setUserForm({ ...userForm, role: event.target.value })}><option value="staff">Nhân viên vận hành</option><option value="editor">Biên tập viên</option><option value="customer">Khách hàng</option></select></label>
-            <label>Mật khẩu ban đầu<input type="password" minLength="10" placeholder="Để trống để hệ thống tự sinh" value={userForm.password} onChange={(event) => setUserForm({ ...userForm, password: event.target.value })} /></label>
+            <label>Mật khẩu ban đầu<input type="password" minLength="8" pattern="(?=.*[A-Za-z])(?=.*\d).{8,}" placeholder="Để trống để hệ thống tự sinh" value={userForm.password} onChange={(event) => setUserForm({ ...userForm, password: event.target.value })} /><small>Tối thiểu 8 ký tự, bắt buộc có chữ và số; có thể để trống để tự sinh.</small></label>
             <button className="button button--dark">Tạo tài khoản</button>
           </form>
           <div className="admin-panel table-wrap"><table><thead><tr><th>Người dùng</th><th>Vai trò</th><th>Ngày tạo</th><th>Trạng thái</th><th></th></tr></thead>
@@ -1350,7 +1360,7 @@ function Footer() {
     <footer className="site-footer">
       <div className="shell footer-grid">
         <div><div className="brand brand--light"><span className="brand__mark"><Flower2 /></span><span><b>Flowery</b><small>Trao hoa, gửi thương</small></span></div><p>Hoa tươi thiết kế theo đơn, giao tận tay và lưu giữ từng khoảnh khắc đáng nhớ.</p></div>
-        <div><b>Khám phá</b><a href="#collection">Bộ sưu tập</a><a href="#journal">Cẩm nang hoa</a><a href="/api/partner/catalog.xml?key=demo-partner-key" target="_blank" rel="noreferrer">Partner XML</a></div>
+        <div><b>Khám phá</b><a href="#collection">Bộ sưu tập</a><a href="#journal">Cẩm nang hoa</a><span>Partner API/XML bảo mật</span></div>
         <div><b>Cam kết</b><span>Hoa tươi tuyển chọn</span><span>Thanh toán bảo mật</span><span>Hỗ trợ 08:00–21:00</span></div>
         <div><b>Liên hệ</b><span>hello@flowery.vn</span><span>1900 6868</span><span>TP. Hồ Chí Minh</span></div>
       </div>
@@ -1360,6 +1370,8 @@ function Footer() {
 }
 
 function App() {
+  // === Khối điều phối giao diện ===
+  // Quản lý phiên đăng nhập, giỏ hàng, thông báo và chọn màn hình theo route/tab.
   const [view, setView] = useState('home')
   const [user, setUser] = useState(null)
   const [authReady, setAuthReady] = useState(false)
